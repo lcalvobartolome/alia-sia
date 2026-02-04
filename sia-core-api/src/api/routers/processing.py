@@ -16,25 +16,37 @@ Modified: 04/02/2026 (Migrated to FastAPI and reorganized)
 """
 
 from typing import Any, Dict, Optional
+import uuid
+import base64
+from pathlib import Path
 
-from fastapi import APIRouter, Body, Query, Request  # type: ignore
+from fastapi import APIRouter, Body, File, Form, Query, Request, UploadFile  # type: ignore
 from src.api.exceptions import (NotFoundException, ProcessingException, ValidationException)
 
 from ..schemas import (
     BaseResponse,
-    DataSource,
-    EmbeddingsGenerationRequest,
     ErrorResponse,
     IngestionResponse,
-    OnDemandInferenceRequest,
+    OnDemandInferenceBatchRequest,
+    OnDemandInferenceSingleRequest,
     OnDemandInferenceResponse,
     ProcessingJobResponse,
-    SummarizationRequest,
     TopicModelTrainingRequest,
     DownloadRequest,
-    TextExtractionRequest,
-    MetadataExtractionRequest,
-    AIRelevanceRequest,
+    # Batch processing schemas
+    TextExtractionBatchRequest,
+    SummarizationBatchRequest,
+    MetadataExtractionBatchRequest,
+    AIRelevanceBatchRequest,
+    TopicInferenceBatchRequest,
+    EmbeddingsBatchRequest,
+    # Single document processing schemas
+    TextExtractionSingleRequest,
+    SummarizationSingleRequest,
+    MetadataExtractionSingleRequest,
+    AIRelevanceSingleRequest,
+    TopicInferenceSingleRequest,
+    EmbeddingsSingleRequest,
 )
 
 router = APIRouter(
@@ -144,24 +156,52 @@ async def delete_model(
 
 
 @router.post(
-    "/inference/on-demand",
-    response_model=OnDemandInferenceResponse,
-    summary="On-demand inference",
-    description="Real-time processing of external documents (not indexed). Operations can be disabled as needed."
+    "/inference/on-demand/batch",
+    response_model=Dict[str, Any],
+    summary="Batch on-demand inference",
+    description="Process multiple external documents (not indexed) from a parquet file. Operations: embeddings, topics, summary."
 )
-async def on_demand_inference(
+async def on_demand_inference_batch(
     req: Request,
-    request: OnDemandInferenceRequest = Body(...),
+    request: OnDemandInferenceBatchRequest = Body(...),
+) -> Dict[str, Any]:
+    """
+    Perform on-demand inference on multiple external documents from a parquet file.
+    """
+    # TODO: Implement batch on-demand inference
+    return {
+        "success": True,
+        "message": "Batch on-demand inference started (pending implementation)",
+        "parquet_path": request.parquet_path,
+        "operations": request.operations,
+        "model_name": request.model_name,
+        "compare_with_index": request.compare_with_index
+    }
+
+
+@router.post(
+    "/inference/on-demand/single",
+    response_model=OnDemandInferenceResponse,
+    summary="Single document on-demand inference",
+    description="Real-time processing of a single external document (not indexed). Operations: embeddings, topics, summary."
+)
+async def on_demand_inference_single(
+    req: Request,
+    request: OnDemandInferenceSingleRequest = Body(...),
 ) -> OnDemandInferenceResponse:
     """
-    Perform on-demand inference on an external document.
+    Perform on-demand inference on a single external document.
     """
     sc = req.app.state.solr_client
-    response = OnDemandInferenceResponse(success=True)
+    doc_id = request.document_id or f"EXT-{uuid.uuid4().hex[:8].upper()}"
 
     try:
-        # @TODO: Implement
-        return response
+        # TODO: Implement actual inference logic
+        return OnDemandInferenceResponse(
+            success=True,
+            document_id=doc_id,
+            message="On-demand inference completed (pending implementation)"
+        )
 
     except (ValidationException, NotFoundException):
         raise
@@ -194,90 +234,281 @@ async def download(
 # MODULE 2: PDF Document Parsing
 # ======================================================
 @router.post(
-    "/pdf/extract-text",
+    "/pdf/extract-text/batch",
     response_model=Dict[str, Any],
-    summary="Text extraction and normalization",
-    description="Extract textual content from PDFs and apply normalization (cleaning, structuring).",
+    summary="Batch text extraction and normalization",
+    description="Extract textual content from multiple PDFs in a parquet file and apply normalization.",
 )
-async def extract_and_normalize_text(
+async def extract_text_batch(
     request: Request,
-    extraction_request: TextExtractionRequest = Body(...),
+    extraction_request: TextExtractionBatchRequest = Body(...),
 ) -> Dict[str, Any]:
-    """Extract and normalize text from PDF documents."""
-    # TODO: Implement text extraction and normalization
+    """Extract and normalize text from multiple PDF documents in a parquet file."""
+    # TODO: Implement batch text extraction and normalization
     return {
         "success": True,
-        "message": "Text extraction started (pending implementation)",
-        "documents_queued": len(extraction_request.document_ids)
+        "message": "Batch text extraction started (pending implementation)",
+        "parquet_path": extraction_request.parquet_path,
+        "normalize": extraction_request.normalize
     }
+
+
+@router.post(
+    "/pdf/extract-text/single",
+    response_model=Dict[str, Any],
+    summary="Single document text extraction",
+    description="Extract textual content from a single PDF and apply normalization. Supports file upload.",
+)
+async def extract_text_single(
+    request: Request,
+    file: Optional[UploadFile] = File(None, description="PDF file to upload"),
+    document_id: Optional[str] = Form(None, description="Document ID (auto-generated if not provided)"),
+    normalize: bool = Form(True, description="Apply text normalization"),
+) -> Dict[str, Any]:
+    """
+    Extract and normalize text from a single PDF document.
+    
+    Upload a PDF file directly using multipart/form-data.
+    """
+    # Generate document_id if not provided
+    doc_id = document_id or f"DOC-{uuid.uuid4().hex[:8].upper()}"
+    
+    if not file:
+        raise ValidationException("No file uploaded. Please provide a PDF file.")
+    
+    # Validate file type
+    if not file.filename.lower().endswith('.pdf'):
+        raise ValidationException(f"Invalid file type. Expected PDF, got: {file.filename}")
+    
+    # Get upload directory from config
+    upload_dir = Path(request.app.state.config.get("restapi", "path_uploads"))
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Save file to mounted volume
+    try:
+        pdf_content = await file.read()
+        file_size = len(pdf_content)
+        
+        # Save with document_id as filename
+        saved_path = upload_dir / f"{doc_id}.pdf"
+        with open(saved_path, "wb") as f:
+            f.write(pdf_content)
+            
+    except Exception as e:
+        raise ProcessingException(f"Error saving uploaded file: {str(e)}")
+    
+    # TODO: Implement actual text extraction from pdf_content
+    return {
+        "success": True,
+        "message": "Text extraction completed (pending implementation)",
+        "document_id": doc_id,
+        "filename": file.filename,
+        "saved_path": str(saved_path),
+        "file_size_bytes": file_size,
+        "normalize": normalize
+    }
+
+
+@router.post(
+    "/pdf/extract-text/single/from-path",
+    response_model=Dict[str, Any],
+    summary="Single document text extraction from path or base64",
+    description="Extract textual content from a PDF file already in the server (by path) or from base64 encoded content.",
+)
+async def extract_text_single_from_path(
+    request: Request,
+    extraction_request: TextExtractionSingleRequest = Body(...),
+) -> Dict[str, Any]:
+    """
+    Extract and normalize text from a single PDF document.
+    
+    Use this endpoint when:
+    - The PDF is already on the server (provide pdf_path)
+    - You have the PDF as base64 encoded string (provide pdf_content)
+    
+    For direct file upload, use /pdf/extract-text/single instead.
+    """
+    # Generate document_id if not provided
+    doc_id = extraction_request.document_id or f"DOC-{uuid.uuid4().hex[:8].upper()}"
+    
+    # Validate that at least one source is provided
+    if not extraction_request.pdf_path and not extraction_request.pdf_content:
+        raise ValidationException("Either 'pdf_path' or 'pdf_content' must be provided.")
+    
+    file_size = 0
+    source_type = ""
+    
+    try:
+        if extraction_request.pdf_path:
+            # Read from server path
+            pdf_path = Path(extraction_request.pdf_path)
+            if not pdf_path.exists():
+                raise NotFoundException(f"PDF file not found: {extraction_request.pdf_path}")
+            if not pdf_path.suffix.lower() == '.pdf':
+                raise ValidationException(f"Invalid file type. Expected PDF, got: {pdf_path.suffix}")
+            
+            pdf_content = pdf_path.read_bytes()
+            file_size = len(pdf_content)
+            source_type = "path"
+            
+        elif extraction_request.pdf_content:
+            # Decode from base64
+            try:
+                pdf_content = base64.b64decode(extraction_request.pdf_content)
+                file_size = len(pdf_content)
+                source_type = "base64"
+            except Exception:
+                raise ValidationException("Invalid base64 encoded PDF content.")
+        
+        # TODO: Implement actual text extraction from pdf_content
+        return {
+            "success": True,
+            "message": "Text extraction completed (pending implementation)",
+            "document_id": doc_id,
+            "source_type": source_type,
+            "source_path": extraction_request.pdf_path,
+            "file_size_bytes": file_size,
+            "normalize": extraction_request.normalize
+        }
+        
+    except (ValidationException, NotFoundException):
+        raise
+    except Exception as e:
+        raise ProcessingException(f"Error processing PDF: {str(e)}")
+
 
 # ======================================================
 # MODULE 3: Automatic Summary Generation
 # ======================================================
 @router.post(
-    "/summarization/generate",
+    "/summarization/generate/batch",
     response_model=Dict[str, Any],
-    summary="Automatic summary generation",
-    description="Document summary generation based on LLMs",
+    summary="Batch summary generation",
+    description="Generate summaries for multiple documents from a parquet file using LLMs.",
 )
-async def generate_summaries(
+async def generate_summaries_batch(
     request: Request,
-    summary_request: SummarizationRequest = Body(...),
+    summary_request: SummarizationBatchRequest = Body(...),
 ) -> Dict[str, Any]:
-    """Generate automatic summaries with configurable focus and traceability."""
-    # TODO: Implement summary generation with LLM
+    """Generate automatic summaries for multiple documents in a parquet file."""
+    # TODO: Implement batch summary generation with LLM
     return {
         "success": True,
-        "message": "Summary generation started (pending implementation)",
-        "documents_queued": len(summary_request.document_ids),
+        "message": "Batch summary generation started (pending implementation)",
+        "parquet_path": summary_request.parquet_path,
         "focus_dimensions": summary_request.focus_dimensions or ["general"],
         "traceability": summary_request.include_traceability
     }
+
+
+@router.post(
+    "/summarization/generate/single",
+    response_model=Dict[str, Any],
+    summary="Single document summary generation",
+    description="Generate summary for a single document using LLMs.",
+)
+async def generate_summary_single(
+    request: Request,
+    summary_request: SummarizationSingleRequest = Body(...),
+) -> Dict[str, Any]:
+    """Generate automatic summary for a single document."""
+    # TODO: Implement single summary generation with LLM
+    return {
+        "success": True,
+        "message": "Summary generation completed (pending implementation)",
+        "document_id": summary_request.document_id,
+        "focus_dimensions": summary_request.focus_dimensions or ["general"],
+        "traceability": summary_request.include_traceability
+    }
+
 
 # ======================================================
 # MODULE 4: Automatic Metadata Enrichment
 # ======================================================
 @router.post(
-    "/metadata/auto-extract",
+    "/metadata/auto-extract/batch",
     response_model=Dict[str, Any],
-    summary="Automatic metadata extraction",
-    description="Normalized metadata extraction using LLMs"
+    summary="Batch metadata extraction",
+    description="Extract metadata from multiple documents in a parquet file using LLMs.",
 )
-async def extract_metadata(
+async def extract_metadata_batch(
     request: Request,
-    metadata_request: MetadataExtractionRequest = Body(...),
+    metadata_request: MetadataExtractionBatchRequest = Body(...),
 ) -> Dict[str, Any]:
-    """Extract structured metadata from documents using LLMs."""
-    # TODO: Implement metadata extraction with LLM
+    """Extract structured metadata from multiple documents in a parquet file."""
+    # TODO: Implement batch metadata extraction with LLM
     return {
         "success": True,
-        "message": "Metadata extraction started (pending implementation)",
-        "documents_queued": len(metadata_request.document_ids),
+        "message": "Batch metadata extraction started (pending implementation)",
+        "parquet_path": metadata_request.parquet_path,
         "fields_to_extract": metadata_request.metadata_fields,
         "validation_enabled": metadata_request.validation
     }
+
+
+@router.post(
+    "/metadata/auto-extract/single",
+    response_model=Dict[str, Any],
+    summary="Single document metadata extraction",
+    description="Extract metadata from a single document using LLMs.",
+)
+async def extract_metadata_single(
+    request: Request,
+    metadata_request: MetadataExtractionSingleRequest = Body(...),
+) -> Dict[str, Any]:
+    """Extract structured metadata from a single document."""
+    # TODO: Implement single metadata extraction with LLM
+    return {
+        "success": True,
+        "message": "Metadata extraction completed (pending implementation)",
+        "document_id": metadata_request.document_id,
+        "fields_to_extract": metadata_request.metadata_fields,
+        "validation_enabled": metadata_request.validation
+    }
+
 
 # ======================================================
 # MODULE 5: Identification of AI-Relevant Actions
 # ======================================================
 @router.post(
-    "/ai-relevance/classify",
+    "/ai-relevance/classify/batch",
     response_model=Dict[str, Any],
-    summary="AI relevance classification",
-    description="Automatic detection and classification of AI-related actions.",
+    summary="Batch AI relevance classification",
+    description="Classify multiple documents from a parquet file by AI relevance.",
 )
-async def classify_ai_relevance(
+async def classify_ai_relevance_batch(
     request: Request,
-    relevance_request: AIRelevanceRequest = Body(...),
+    relevance_request: AIRelevanceBatchRequest = Body(...),
 ) -> Dict[str, Any]:
-    """Classify documents by AI relevance."""
-    # TODO: Implement AI relevance classification
+    """Classify multiple documents by AI relevance from a parquet file."""
+    # TODO: Implement batch AI relevance classification
     return {
         "success": True,
-        "message": "AI relevance classification started (pending implementation)",
-        "documents_queued": len(relevance_request.document_ids),
+        "message": "Batch AI relevance classification started (pending implementation)",
+        "parquet_path": relevance_request.parquet_path,
         "output_format": relevance_request.output_format
     }
+
+
+@router.post(
+    "/ai-relevance/classify/single",
+    response_model=Dict[str, Any],
+    summary="Single document AI relevance classification",
+    description="Classify a single document by AI relevance.",
+)
+async def classify_ai_relevance_single(
+    request: Request,
+    relevance_request: AIRelevanceSingleRequest = Body(...),
+) -> Dict[str, Any]:
+    """Classify a single document by AI relevance."""
+    # TODO: Implement single AI relevance classification
+    return {
+        "success": True,
+        "message": "AI relevance classification completed (pending implementation)",
+        "document_id": relevance_request.document_id,
+        "output_format": relevance_request.output_format
+    }
+
 
 # ======================================================
 # MODULE 6: Thematic Classification with Topic Models
@@ -304,25 +535,40 @@ async def train_topic_model(
 
 
 @router.post(
-    "/topic-modeling/infer",
-    summary="Infer text topics",
-    description="""
-    Infer topic distribution for a given text.
-    
-    This endpoint can be invoked independently outside the preprocessing flow
-    to obtain thematic information from external documents.
-    """,
+    "/topic-modeling/infer/batch",
+    response_model=Dict[str, Any],
+    summary="Batch topic inference",
+    description="Infer topic distributions for multiple documents from a parquet file.",
 )
-async def infer_topic(
+async def infer_topics_batch(
     request: Request,
-    text_to_infer: str = Body(..., description="Text to analyze"),
-    model_name: str = Body(..., description="Model name"),
+    inference_request: TopicInferenceBatchRequest = Body(...),
 ) -> Dict[str, Any]:
-    """Infer topic distribution for a text."""
+    """Infer topic distributions for multiple documents in a parquet file."""
+    # TODO: Implement batch topic inference
+    return {
+        "success": True,
+        "message": "Batch topic inference started (pending implementation)",
+        "parquet_path": inference_request.parquet_path,
+        "model_name": inference_request.model_name
+    }
+
+
+@router.post(
+    "/topic-modeling/infer/single",
+    response_model=Dict[str, Any],
+    summary="Single document topic inference",
+    description="Infer topic distribution for a single text.",
+)
+async def infer_topic_single(
+    request: Request,
+    inference_request: TopicInferenceSingleRequest = Body(...),
+) -> Dict[str, Any]:
+    """Infer topic distribution for a single text."""
     sc = request.app.state.solr_client
 
     try:
-        result = sc.do_Q22(model_name=model_name, text_to_infer=text_to_infer)
+        result = sc.do_Q22(model_name=inference_request.model_name, text_to_infer=inference_request.text)
         return {"success": True, "data": result}
 
     except (ValidationException, NotFoundException):
@@ -335,27 +581,41 @@ async def infer_topic(
 # MODULE 7: Generation of document embeddings
 # ======================================================
 @router.post(
-    "/embeddings/generate-contextual",
+    "/embeddings/generate-contextual/batch",
     response_model=Dict[str, Any],
-    summary="Generate contextualized embeddings",
-    description="""
-    **Contextualized embeddings generation with SentenceTransformers.**
-    
-    Generates high-quality dense vector representations for semantic search,
-    less interpretable but more accurate in distance measures.
-    """,
+    summary="Batch embeddings generation",
+    description="Generate contextualized embeddings for multiple documents from a parquet file.",
 )
-async def generate_contextual_embeddings(
+async def generate_embeddings_batch(
     request: Request,
-    embeddings_request: EmbeddingsGenerationRequest = Body(...),
+    embeddings_request: EmbeddingsBatchRequest = Body(...),
 ) -> Dict[str, Any]:
-    """Generate contextualized embeddings using SentenceTransformers."""
-    # TODO: Implement contextualized embeddings generation
+    """Generate contextualized embeddings for multiple documents in a parquet file."""
+    # TODO: Implement batch embeddings generation
     return {
         "success": True,
-        "message": "Contextualized embeddings generation started (pending implementation)",
-        "corpus": embeddings_request.corpus_name,
+        "message": "Batch embeddings generation started (pending implementation)",
+        "parquet_path": embeddings_request.parquet_path,
         "model_type": embeddings_request.model_type,
-        "representation_type": "contextualized_embeddings",
         "batch_size": embeddings_request.batch_size
+    }
+
+
+@router.post(
+    "/embeddings/generate-contextual/single",
+    response_model=Dict[str, Any],
+    summary="Single document embeddings generation",
+    description="Generate contextualized embeddings for a single document.",
+)
+async def generate_embeddings_single(
+    request: Request,
+    embeddings_request: EmbeddingsSingleRequest = Body(...),
+) -> Dict[str, Any]:
+    """Generate contextualized embeddings for a single document."""
+    # TODO: Implement single embeddings generation
+    return {
+        "success": True,
+        "message": "Embeddings generation completed (pending implementation)",
+        "document_id": embeddings_request.document_id,
+        "model_type": embeddings_request.model_type
     }

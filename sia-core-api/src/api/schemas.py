@@ -78,22 +78,24 @@ class DataResponse(BaseModel):
 
 
 # ======================================================
-# Health/Ping Response
+# Health Check Response
 # ======================================================
-class PingResponse(BaseModel):
-    """Response for health check endpoint."""
-    status: str = "pong"
-    timestamp: str
-    service: str = "NP Tools API"
-
-
 class HealthResponse(BaseModel):
-    """Response for detailed health check endpoint."""
-    status: str
-    timestamp: str
-    service: str = "NP Tools API"
-    version: str = "2.0.0"
-    components: Dict[str, Any]
+    """Health check response including Solr status."""
+    status: str = Field(..., description="Overall status: 'healthy' or 'unhealthy'")
+    timestamp: str = Field(..., description="ISO timestamp of check")
+    solr_connected: bool = Field(..., description="Solr connection status")
+    version: str = Field("1.0.0", description="API version")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "status": "healthy",
+                "timestamp": "2026-02-04T10:30:00Z",
+                "solr_connected": True,
+                "version": "1.0.0"
+            }
+        }
 
 
 # ======================================================
@@ -166,28 +168,265 @@ class DownloadRequest(BaseModel):
     end_date: Optional[str] = Field(None, description="End date (YYYY-MM-DD)")
     filters: Optional[Dict[str, Any]] = Field(None, description="Additional filters")
 
+
+# ======================================================
+# TEXT EXTRACTION SCHEMAS
+# ======================================================
+class TextExtractionBatchRequest(BaseModel):
+    """Request for batch PDF text extraction from parquet file."""
+    parquet_path: str = Field(..., description="Path to the parquet file containing documents")
+    text_column: str = Field("pdf_path", description="Column name containing PDF paths")
+    id_column: str = Field("doc_id", description="Column name containing document IDs")
+    normalize: bool = Field(True, description="Apply text normalization")
+    output_path: Optional[str] = Field(None, description="Path to save extracted text")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "parquet_path": "/data/documents/batch_2024.parquet",
+                "text_column": "pdf_path",
+                "id_column": "doc_id",
+                "normalize": True
+            }
+        }
+
+
+class TextExtractionSingleRequest(BaseModel):
+    """Request for single document PDF text extraction (JSON body, for path or base64)."""
+    document_id: Optional[str] = Field(None, description="Document ID (auto-generated if not provided)")
+    pdf_path: Optional[str] = Field(None, description="Path to the PDF file (if not in system)")
+    pdf_content: Optional[str] = Field(None, description="Base64 encoded PDF content")
+    normalize: bool = Field(True, description="Apply text normalization")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "document_id": "DOC-2024-001",
+                "pdf_path": "/data/pdfs/document.pdf",
+                "normalize": True
+            }
+        }
+
+
+# ======================================================
+# SUMMARIZATION SCHEMAS
+# ======================================================
+class SummarizationBatchRequest(BaseModel):
+    """Request for batch document summarization from parquet file."""
+    parquet_path: str = Field(..., description="Path to the parquet file containing documents")
+    text_column: str = Field("text", description="Column name containing document text")
+    id_column: str = Field("doc_id", description="Column name containing document IDs")
+    focus_dimensions: Optional[List[str]] = Field(None, description="Focus dimensions for summary")
+    include_traceability: bool = Field(True, description="Include traceability to original text")
+    output_path: Optional[str] = Field(None, description="Path to save summaries")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "parquet_path": "/data/documents/batch_2024.parquet",
+                "text_column": "full_text",
+                "id_column": "doc_id",
+                "focus_dimensions": ["technical", "economic"],
+                "include_traceability": True
+            }
+        }
+
+
+class SummarizationSingleRequest(BaseModel):
+    """Request for single document summarization."""
+    document_id: Optional[str] = Field(None, description="Document ID (if indexed)")
+    text: Optional[str] = Field(None, description="Raw text to summarize (if not indexed)")
+    focus_dimensions: Optional[List[str]] = Field(None, description="Focus dimensions for summary")
+    include_traceability: bool = Field(True, description="Include traceability to original text")
+    max_length: Optional[int] = Field(None, description="Maximum summary length")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "text": "El presente contrato tiene por objeto...",
+                "focus_dimensions": ["technical"],
+                "include_traceability": True,
+                "max_length": 500
+            }
+        }
+
+
+# ======================================================
+# METADATA EXTRACTION SCHEMAS
+# ======================================================
+class MetadataExtractionBatchRequest(BaseModel):
+    """Request for batch automatic metadata extraction from parquet file."""
+    parquet_path: str = Field(..., description="Path to the parquet file containing documents")
+    text_column: str = Field("text", description="Column name containing document text")
+    id_column: str = Field("doc_id", description="Column name containing document IDs")
+    metadata_fields: List[str] = Field(..., description="Metadata fields to extract")
+    validation: bool = Field(True, description="Validate extracted metadata")
+    output_path: Optional[str] = Field(None, description="Path to save extracted metadata")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "parquet_path": "/data/documents/batch_2024.parquet",
+                "text_column": "full_text",
+                "id_column": "doc_id",
+                "metadata_fields": ["organization", "budget", "deadline"],
+                "validation": True
+            }
+        }
+
+
+class MetadataExtractionSingleRequest(BaseModel):
+    """Request for single document metadata extraction."""
+    document_id: Optional[str] = Field(None, description="Document ID (if indexed)")
+    text: Optional[str] = Field(None, description="Raw text to extract metadata from (if not indexed)")
+    metadata_fields: List[str] = Field(..., description="Metadata fields to extract")
+    validation: bool = Field(True, description="Validate extracted metadata")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "text": "El presente contrato tiene por objeto...",
+                "metadata_fields": ["organization", "budget", "deadline"],
+                "validation": True
+            }
+        }
+
+
+# ======================================================
+# AI RELEVANCE CLASSIFICATION SCHEMAS
+# ======================================================
+class AIRelevanceBatchRequest(BaseModel):
+    """Request for batch AI relevance classification from parquet file."""
+    parquet_path: str = Field(..., description="Path to the parquet file containing documents")
+    text_column: str = Field("text", description="Column name containing document text")
+    id_column: str = Field("doc_id", description="Column name containing document IDs")
+    output_format: str = Field("binary", description="Output format: 'binary' or 'score'")
+    output_path: Optional[str] = Field(None, description="Path to save classification results")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "parquet_path": "/data/documents/batch_2024.parquet",
+                "text_column": "full_text",
+                "id_column": "doc_id",
+                "output_format": "score"
+            }
+        }
+
+
+class AIRelevanceSingleRequest(BaseModel):
+    """Request for single document AI relevance classification."""
+    document_id: Optional[str] = Field(None, description="Document ID (if indexed)")
+    text: Optional[str] = Field(None, description="Raw text to classify (if not indexed)")
+    output_format: str = Field("binary", description="Output format: 'binary' or 'score'")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "text": "Desarrollo de sistema de inteligencia artificial...",
+                "output_format": "score"
+            }
+        }
+
+
+# ======================================================
+# TOPIC INFERENCE SCHEMAS
+# ======================================================
+class TopicInferenceBatchRequest(BaseModel):
+    """Request for batch topic inference from parquet file."""
+    parquet_path: str = Field(..., description="Path to the parquet file containing documents")
+    text_column: str = Field("text", description="Column name containing document text")
+    id_column: str = Field("doc_id", description="Column name containing document IDs")
+    model_name: str = Field(..., description="Name of the trained topic model to use")
+    output_path: Optional[str] = Field(None, description="Path to save inference results")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "parquet_path": "/data/documents/batch_2024.parquet",
+                "text_column": "full_text",
+                "id_column": "doc_id",
+                "model_name": "topic_model_v1"
+            }
+        }
+
+
+class TopicInferenceSingleRequest(BaseModel):
+    """Request for single document topic inference."""
+    text: str = Field(..., description="Text to analyze for topic distribution")
+    model_name: str = Field(..., description="Name of the trained topic model to use")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "text": "El presente contrato tiene por objeto...",
+                "model_name": "topic_model_v1"
+            }
+        }
+
+
+# ======================================================
+# EMBEDDINGS GENERATION SCHEMAS
+# ======================================================
+class EmbeddingsBatchRequest(BaseModel):
+    """Request for batch embeddings generation from parquet file."""
+    parquet_path: str = Field(..., description="Path to the parquet file containing documents")
+    text_column: str = Field("text", description="Column name containing document text")
+    id_column: str = Field("doc_id", description="Column name containing document IDs")
+    model_type: str = Field("sentence-transformers", description="Embedding model type")
+    batch_size: int = Field(32, ge=1, le=128, description="Batch size for processing")
+    output_path: Optional[str] = Field(None, description="Path to save embeddings")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "parquet_path": "/data/documents/batch_2024.parquet",
+                "text_column": "full_text",
+                "id_column": "doc_id",
+                "model_type": "sentence-transformers",
+                "batch_size": 32
+            }
+        }
+
+
+class EmbeddingsSingleRequest(BaseModel):
+    """Request for single document embeddings generation."""
+    document_id: Optional[str] = Field(None, description="Document ID (if indexed)")
+    text: Optional[str] = Field(None, description="Raw text to generate embeddings for (if not indexed)")
+    model_type: str = Field("sentence-transformers", description="Embedding model type")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "text": "El presente contrato tiene por objeto...",
+                "model_type": "sentence-transformers"
+            }
+        }
+
+
+# Legacy schemas (kept for backwards compatibility)
 class TextExtractionRequest(BaseModel):
-    """Request for PDF text extraction and normalization."""
+    """DEPRECATED: Use TextExtractionBatchRequest or TextExtractionSingleRequest."""
     document_ids: List[str] = Field(..., description="Document IDs to process")
     normalize: bool = Field(True, description="Apply text normalization")
 
 
 class SummarizationRequest(BaseModel):
-    """Request for document summarization."""
+    """DEPRECATED: Use SummarizationBatchRequest or SummarizationSingleRequest."""
     document_ids: List[str] = Field(..., description="Document IDs to summarize")
     focus_dimensions: Optional[List[str]] = Field(None, description="Focus dimensions for summary")
     include_traceability: bool = Field(True, description="Include traceability to original text")
 
 
 class MetadataExtractionRequest(BaseModel):
-    """Request for automatic metadata extraction."""
+    """DEPRECATED: Use MetadataExtractionBatchRequest or MetadataExtractionSingleRequest."""
     document_ids: List[str] = Field(..., description="Document IDs to process")
     metadata_fields: List[str] = Field(..., description="Metadata fields to extract")
     validation: bool = Field(True, description="Validate extracted metadata")
 
 
 class AIRelevanceRequest(BaseModel):
-    """Request for AI relevance classification."""
+    """DEPRECATED: Use AIRelevanceBatchRequest or AIRelevanceSingleRequest."""
     document_ids: List[str] = Field(..., description="Document IDs to classify")
     output_format: str = Field("binary", description="Output format: 'binary' or 'score'")
 
@@ -234,22 +473,6 @@ class TopicModelTrainingRequest(BaseModel):
         10, ge=2, description="Number of topics")
 
 
-class EmbeddingsGenerationRequest(BaseModel):
-    """Request for embeddings generation."""
-    corpus_name: str = Field(..., description="Corpus for embedding generation")
-    model_type: str = Field("bert", description="Embedding model: bert, sentence-transformers")
-    document_ids: Optional[List[str]] = Field(None, description="Specific document IDs or None for all")
-    batch_size: int = Field(32, ge=1, le=128, description="Batch size for processing")
-
-
-class SummarizationRequest(BaseModel):
-    """Request for document summarization."""
-    corpus_name: str = Field(..., description="Corpus to summarize")
-    model_type: str = Field("default", description="Summarization model")
-    max_length: Optional[int] = Field(
-        None, description="Maximum summary length")
-
-
 class ProcessingJobResponse(BaseResponse):
     """Response for processing jobs."""
     job_id: Optional[str] = None
@@ -259,12 +482,53 @@ class ProcessingJobResponse(BaseResponse):
 
 
 # --- On-Demand Inference (External Documents) ---
-class OnDemandInferenceRequest(BaseModel):
+class OnDemandInferenceBatchRequest(BaseModel):
     """
-    Request for on-demand inference on external (non-indexed) documents.
+    Request for batch on-demand inference on external (non-indexed) documents.
+    Processes multiple documents from a parquet file.
+    """
+    parquet_path: str = Field(..., description="Path to parquet file with documents to process")
+    text_column: str = Field("text", description="Column name containing the text")
+    id_column: Optional[str] = Field(None, description="Column name for document IDs")
+    operations: List[str] = Field(
+        default=["embeddings"],
+        description="Operations: embeddings, topics, summary, all"
+    )
+    model_name: Optional[str] = Field(
+        None, description="Model name (required for topic inference)")
+    compare_with_index: bool = Field(
+        False,
+        description="Compare results with existing index to find similar documents"
+    )
+    corpus_collection: Optional[str] = Field(
+        None,
+        description="Corpus collection to compare against (required if compare_with_index=True)"
+    )
+    rows_per_doc: Optional[int] = Field(
+        5, description="Number of similar documents to return per document")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "parquet_path": "/data/external_docs.parquet",
+                "text_column": "content",
+                "id_column": "doc_id",
+                "operations": ["embeddings", "topics"],
+                "model_name": "my_topic_model",
+                "compare_with_index": True,
+                "corpus_collection": "np_corpus",
+                "rows_per_doc": 5
+            }
+        }
+
+
+class OnDemandInferenceSingleRequest(BaseModel):
+    """
+    Request for on-demand inference on a single external (non-indexed) document.
     Allows real-time processing and comparison with existing index.
     """
     text: str = Field(..., description="Text/document to process")
+    document_id: Optional[str] = Field(None, description="Optional document identifier")
     operations: List[str] = Field(
         default=["embeddings"],
         description="Operations: embeddings, topics, summary, all"
@@ -287,10 +551,10 @@ class OnDemandInferenceRequest(BaseModel):
     class Config:
         json_schema_extra = {
             "example": {
-                "text": "Suministro de equipos informáticos para oficinas...",
+                "text": "Supply of computer equipment for offices...",
+                "document_id": "EXT-001",
                 "operations": ["embeddings", "topics"],
-                "cpv": "30",
-                "granularity": "high",
+                "model_name": "my_topic_model",
                 "compare_with_index": True,
                 "corpus_collection": "np_corpus",
                 "rows": 10
@@ -299,7 +563,8 @@ class OnDemandInferenceRequest(BaseModel):
 
 
 class OnDemandInferenceResponse(BaseResponse):
-    """Response for on-demand inference."""
+    """Response for single on-demand inference."""
+    document_id: Optional[str] = None
     embeddings: Optional[List[float]] = None
     topic_distribution: Optional[List[Dict[str, Any]]] = None
     summary: Optional[str] = None

@@ -13,3 +13,4 @@ termcolor==2.5.0
 pyarrow==19.0.1
 uvicorn==0.40.0
 fastapi
+python-multipart>=0.0.22

@@ -10,12 +10,13 @@ Modified: 04/02/2026 (Migrated to FastAPI and reorganized)
 """
 
 import logging
+import os
 import pathlib
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import AsyncGenerator
 
-from fastapi import FastAPI, HTTPException, Request  # type: ignore
+from fastapi import Depends, FastAPI, HTTPException, Request  # type: ignore
 from fastapi.middleware.cors import CORSMiddleware  # type: ignore
 from fastapi.openapi.utils import get_openapi  # type: ignore
 from src.api.exceptions import (APIException, api_exception_handler,
@@ -24,8 +25,9 @@ from src.api.exceptions import (APIException, api_exception_handler,
 from src.api.routers.admin import router as admin_router
 from src.api.routers.processing import router as processing_router
 from src.api.routers.services import router as exploitation_router
-from src.api.schemas import HealthResponse, PingResponse
+from src.api.schemas import HealthResponse
 from src.core.clients.np_solr_client import SIASolrClient
+from src.api.auth import verify_api_key, API_KEY_HEADER_NAME
 
 
 # ======================================================
@@ -105,12 +107,16 @@ app = FastAPI(
 # ======================================================
 # CORS Middleware
 # ======================================================
+# Define allowed origins (add your frontend URLs here)
+ALLOWED_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:8080").split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # @beauseant
+    allow_origins=ALLOWED_ORIGINS,  # Specific origins instead of "*"
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["*", API_KEY_HEADER_NAME],  # Allow API key header
+    expose_headers=["X-Request-ID"],
 )
 
 
@@ -123,18 +129,21 @@ app.add_exception_handler(Exception, generic_exception_handler)
 
 
 # ======================================================
-# Routers
+# Routers (with API key authentication)
 # ======================================================
-[app.include_router(router) for router in [admin_router,
-                                           processing_router, exploitation_router]]
+# All routers require API key authentication
+# Note: Master key also works as a valid API key
+app.include_router(admin_router, dependencies=[Depends(verify_api_key)])
+app.include_router(processing_router, dependencies=[Depends(verify_api_key)])
+app.include_router(exploitation_router, dependencies=[Depends(verify_api_key)])
 
 # ======================================================
 # Root and Health Endpoints
 # ======================================================
 @app.get(
     "/",
-    summary="Raíz de la API",
-    description="Información básica sobre la API y enlaces a documentación.",
+    summary="API Root",
+    description="Basic API information and documentation links.",
     tags=["Health"],
 )
 async def root():
@@ -142,81 +151,43 @@ async def root():
     return {
         "name": "SIA-Core API",
         "version": VERSION,
-        "description": "API RESTful del Sistema de Inteligencia y Análisis de Contratación y Ayudas Públicas (SIA).",
+        "description": "API RESTful of the  'Sistema de Inteligencia y Análisis de Contratación y Ayudas Públicas (SIA)'.",
         "documentation": {
             "swagger": "/docs",
             "redoc": "/redoc",
             "openapi": "/openapi.json"
         },
         "blocks": {
-            "1_admin": "/admin - Administración de Infraestructura",
-            "2_processing": "/processing - Enriquecimiento e Ingesta",
-            "3_exploitation": "/api - Servicios de Explotación"
+            "1_admin": "/admin - Infrastructure Administration",
+            "2_processing": "/processing - Enrichment and Ingestion",
+            "3_exploitation": "/api - Exploitation Services"
         }
     }
-
-
-@app.get(
-    "/ping",
-    response_model=PingResponse,
-    summary="Health Check Simple",
-    description="Verificación simple de que la API está funcionando.",
-    tags=["Health"],
-    responses={
-        200: {
-            "description": "API funcionando correctamente",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "status": "pong",
-                        "timestamp": "2026-02-04T12:00:00.000000Z",
-                        "service": "NP Tools API"
-                    }
-                }
-            }
-        }
-    }
-)
-async def ping() -> PingResponse:
-    """Health check endpoint."""
-    return PingResponse(
-        status="pong",
-        timestamp=datetime.now(timezone.utc).isoformat(),
-        service="NP Tools API"
-    )
 
 
 @app.get(
     "/health",
     response_model=HealthResponse,
-    summary="Health Check Detallado",
-    description="Estado detallado de salud incluyendo conectividad con Solr.",
+    summary="Health Check",
+    description="Health check including Solr connectivity status.",
     tags=["Health"],
 )
 async def health_check(request: Request) -> HealthResponse:
-    """Detailed health check with component status."""
+    """Health check with Solr status."""
+    solr_connected = False
     try:
         sc = request.app.state.solr_client
-        collections = sc.list_collections()
-        solr_status = "healthy"
-        solr_collections_count = len(
-            collections) if isinstance(collections, list) else 0
-    except Exception as e:
-        solr_status = f"unhealthy: {str(e)}"
-        solr_collections_count = 0
-
-    overall_status = "healthy" if solr_status == "healthy" else "degraded"
+        # Try to list collections as a connectivity test
+        sc.list_collections()
+        solr_connected = True
+    except Exception:
+        solr_connected = False
 
     return HealthResponse(
-        status=overall_status,
+        status="healthy" if solr_connected else "unhealthy",
         timestamp=datetime.now(timezone.utc).isoformat(),
-        service="SIA- API",
-        version=VERSION,
-        components={
-            "api": "healthy",
-            "solr": solr_status,
-            "solr_collections_count": solr_collections_count
-        }
+        solr_connected=solr_connected,
+        version=VERSION
     )
 
 
@@ -239,7 +210,7 @@ def custom_openapi():
     
     # Add servers
     openapi_schema["servers"] = [
-        {"url": "/", "description": "Servidor actual"},
+        {"url": "/", "description": "Current server"},
     ]
 
     app.openapi_schema = openapi_schema

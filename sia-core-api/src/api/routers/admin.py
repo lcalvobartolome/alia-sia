@@ -6,6 +6,7 @@ and dynamic system configuration:
 
 - Solr collections management: creation, listing, reloading and deletion of indexes
 - Display configuration: metadata, visible fields, active filters
+- API key management: generation, listing, revocation
 
 Author: Lorena Calvo-Bartolomé
 Date: 27/03/2023
@@ -13,7 +14,7 @@ Modified: 04/02/2026 (Migrated to FastAPI and reorganized)
 """
 
 from typing import Any, Dict, Optional
-from fastapi import APIRouter, Request, Query # type: ignore
+from fastapi import APIRouter, Depends, Request, Query # type: ignore
 from src.api.schemas import (
     BaseResponse,
     CollectionResponse,
@@ -27,7 +28,17 @@ from src.api.schemas import (
 )
 from src.api.exceptions import (
     ConflictException,
+    NotFoundException,
     SolrException
+)
+from src.api.auth import (
+    api_key_manager,
+    verify_api_key,
+    verify_master_key,
+    APIKeyCreate,
+    APIKeyResponse,
+    APIKeyListResponse,
+    APIKeyInfo,
 )
 
 router = APIRouter(
@@ -375,3 +386,102 @@ async def get_all_searchable_fields(
         raise
     except Exception as e:
         raise SolrException(str(e))
+
+
+# ======================================================
+# API Key Management (requires master key)
+# ======================================================
+@router.post(
+    "/api-keys",
+    response_model=APIKeyResponse,
+    status_code=201,
+    summary="Generate new API key",
+    description="""
+    Generate a new API key. **Requires master key authentication.**
+    
+    The generated API key will only be shown once in the response.
+    Store it securely as it cannot be retrieved later.
+    """,
+    dependencies=[Depends(verify_master_key)],
+)
+async def create_api_key(
+    request: Request,
+    key_request: APIKeyCreate,
+) -> APIKeyResponse:
+    """Generate a new API key."""
+    return api_key_manager.generate_key(key_request.name)
+
+
+@router.get(
+    "/api-keys",
+    response_model=APIKeyListResponse,
+    summary="List all API keys",
+    description="""
+    List all API keys with their metadata. **Requires master key authentication.**
+    
+    Note: The actual key values are not returned for security reasons.
+    """,
+    dependencies=[Depends(verify_master_key)],
+)
+async def list_api_keys(
+    request: Request,
+) -> APIKeyListResponse:
+    """List all API keys."""
+    keys = api_key_manager.list_keys()
+    return APIKeyListResponse(keys=keys, total=len(keys))
+
+
+@router.get(
+    "/api-keys/{key_id}",
+    response_model=APIKeyInfo,
+    summary="Get API key info",
+    description="Get information about a specific API key. **Requires master key authentication.**",
+    dependencies=[Depends(verify_master_key)],
+)
+async def get_api_key(
+    request: Request,
+    key_id: str,
+) -> APIKeyInfo:
+    """Get info about a specific API key."""
+    key_info = api_key_manager.get_key_info(key_id)
+    if not key_info:
+        raise NotFoundException(f"API key with ID '{key_id}' not found")
+    return key_info
+
+
+@router.post(
+    "/api-keys/{key_id}/revoke",
+    response_model=BaseResponse,
+    summary="Revoke API key",
+    description="""
+    Revoke an API key (soft delete). **Requires master key authentication.**
+    
+    The key will be deactivated but kept in records.
+    """,
+    dependencies=[Depends(verify_master_key)],
+)
+async def revoke_api_key(
+    request: Request,
+    key_id: str,
+) -> BaseResponse:
+    """Revoke an API key."""
+    if api_key_manager.revoke_key(key_id):
+        return BaseResponse(success=True, message=f"API key '{key_id}' revoked successfully")
+    raise NotFoundException(f"API key with ID '{key_id}' not found")
+
+
+@router.delete(
+    "/api-keys/{key_id}",
+    response_model=BaseResponse,
+    summary="Delete API key",
+    description="Permanently delete an API key. **Requires master key authentication.**",
+    dependencies=[Depends(verify_master_key)],
+)
+async def delete_api_key(
+    request: Request,
+    key_id: str,
+) -> BaseResponse:
+    """Permanently delete an API key."""
+    if api_key_manager.delete_key(key_id):
+        return BaseResponse(success=True, message=f"API key '{key_id}' deleted successfully")
+    raise NotFoundException(f"API key with ID '{key_id}' not found")
