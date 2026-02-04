@@ -1,0 +1,9 @@
+[restapi]
+batch_size = 100
+corpus_col = corpus
+no_meta_fields = _version_,timestamp
+path_source = /data/source
+thetas_max_sum = 100
+betas_max_sum = 100
+searchable_fields = title,content,description
+date_field = date
