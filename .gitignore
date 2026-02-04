@@ -206,3 +206,7 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 db/datasolr-plugins/NP-solr-dist-plugin/NP-solr-dist-plugin.jar
+
+# Archivos grandes
+*.jar
+db/data/zoo/logs/
