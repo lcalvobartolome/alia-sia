@@ -1,11 +1,31 @@
 """
-Pydantic schemas for request/response models and error handling.
+Pydantic schemas for request/response models.
+
+Design principles
+-----------------
+Responses
+- ResponseBase: every successful response inherits from this (success + message).
+- ErrorResponse: standardised error envelope (documented in OpenAPI, raised by exceptions).
+- Processing single responses extend ResponseBase with a typed data field.
+- Processing batch / pipeline responses use BatchProcessingResponse (job_id + status).
+- Admin / exploitation responses extend ResponseBase with domain-specific fields.
+
+Requests
+- BatchRequestBase: common fields for every batch endpoint (parquet_path, text_column,
+  id_column, output_path).  Each module adds its own fields on top.
+- SingleRequestBase: common fields for every single-document endpoint (document_id, text).
+  Each module adds its own fields on top.
+- PipelineRequest: orchestrates a full ingestion run — picks a data source, selects
+  which modules to execute (respecting dependency order), and carries the per-module
+  configuration in a single payload.
+- OnDemandInferenceRequest: separate from the pipeline — operates on external
+  (non-indexed) documents and optionally compares against an existing index.
 
 Author: Lorena Calvo-Bartolomé
 Date: 04/02/2026
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 from enum import Enum
 
@@ -18,14 +38,45 @@ class QueryOperator(str, Enum):
     AND = "AND"
     OR = "OR"
 
-
 class ProcessingModule(str, Enum):
-    """Available processing modules."""
-    INGESTION = "ingestion"
+    
+    PDF_EXTRACTION = "pdf_extraction"
     SUMMARIZATION = "summarization"
+    METADATA_ENRICHMENT = "metadata_enrichment"
+    AI_REL_CLASSIFICATION = "ai_relevance_classification"
     TOPIC_MODELING = "topic_modeling"
     EMBEDDINGS = "embeddings"
+    INGESTION = "ingestion"
     ALL = "all"
+    
+
+class PipelineModule(str, Enum):
+    """
+    Available processing modules.
+
+    Execution order (when running the pipeline):
+        download --> pdf_extraction --> summarization | metadata_enrichment |
+        ai_relevance_classification | topic_modeling | embeddings --> ingestion
+
+    Dependencies:
+    - All modules from summarization onwards require pdf_extraction.
+    - Note that pdf_extraction requires download (unless documents are already local).
+    - ingestion runs last.
+    """
+    DOWNLOAD = "download"
+    PDF_EXTRACTION = "pdf_extraction"
+    SUMMARIZATION = "summarization"
+    METADATA_ENRICHMENT = "metadata_enrichment"
+    AI_REL_CLASSIFICATION = "ai_relevance_classification"
+    TOPIC_MODELING = "topic_modeling"
+    EMBEDDINGS = "embeddings"
+    INGESTION = "ingestion"
+    ALL = "all"
+    
+class MetadataField(str, Enum):
+    """Predefined metadata fields for extraction."""
+    CPV = "cpv"
+    OBJECTIVE = "objective"
 
 
 class DataSource(str, Enum):
@@ -35,17 +86,30 @@ class DataSource(str, Enum):
     BDNS = "BDNS"
 
 
+# ══════════════════════════════════════════════════════
+#  RESPONSE SCHEMAS
+# ══════════════════════════════════════════════════════
+
 # ======================================================
-# Base Response Models
+# Base Response
 # ======================================================
-class BaseResponse(BaseModel):
-    """Base response model with success indicator."""
+class ResponseBase(BaseModel):
+    """
+    Base response model for ALL API endpoints.
+
+    Every endpoint must return a schema that extends this class.
+    """
     success: bool = True
     message: Optional[str] = None
 
 
 class ErrorResponse(BaseModel):
-    """Standardized error response."""
+    """
+    Standardised error response.
+
+    Used in the responses parameter of endpoint decorators to
+    document error payloads in the OpenAPI spec.
+    """
     success: bool = False
     error: str
     error_code: str
@@ -62,25 +126,160 @@ class ErrorResponse(BaseModel):
         }
 
 
-class PaginatedResponse(BaseModel):
-    """Base paginated response model."""
-    success: bool = True
-    data: List[Any]
-    total: Optional[int] = None
-    start: int = 0
-    rows: int = 10
+# ======================================================
+# Processing Responses — batch / pipeline
+# ======================================================
+class BatchProcessingResponse(ResponseBase):
+    """
+    Generic response for batch and pipeline processing endpoints.
+
+    Batch/pipeline operations save their results internally, so the
+    response only confirms acceptance and provides a job_id.
+    """
+    job_id: Optional[str] = None
+    status: str = "queued"
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "success": True,
+                "message": "Batch processing started",
+                "job_id": "job_abc123",
+                "status": "queued"
+            }
+        }
 
 
-class DataResponse(BaseModel):
-    """Generic response with data field."""
-    success: bool = True
-    data: Any
+# ======================================================
+# Processing Responses — single
+# (Each extends ResponseBase with a typed data field)
+# ======================================================
+class TextExtractionSingleResponse(ResponseBase):
+    """Response for single PDF text extraction."""
+    data: Optional[str] = Field(None, description="Extracted (and normalized if applicable) text")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "success": True,
+                "message": "Text extraction completed",
+                "data": "El presente contrato tiene por objeto el suministro de equipos informáticos..."
+            }
+        }
+
+
+class SummarizationSingleResponse(ResponseBase):
+    """Response for single document summarisation."""
+    data: Optional[str] = Field(None, description="Generated summary text")
+    grounding: Optional[List[Dict[str, Any]]] = Field(
+        None, description="Traceability references to original text segments"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "success": True,
+                "message": "Summary generation completed",
+                "data": "Este documento describe un contrato de suministro...",
+                "grounding": [{"segment": "párrafo 1", "source_start": 0, "source_end": 150}]
+            }
+        }
+
+
+class MetadataExtractionSingleResponse(ResponseBase):
+    """Response for single document metadata extraction."""
+    data: Optional[Dict[str, Any]] = Field(
+        None, description="Extracted metadata key-value pairs"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "success": True,
+                "message": "Metadata extraction completed",
+                "data": {"organization": "Ministerio de Ciencia", "budget": "500000", "deadline": "2026-06-30"}
+            }
+        }
+
+
+class AIRelevanceSingleResponse(ResponseBase):
+    """Response for single document AI relevance classification."""
+    data: Optional[str] = Field(
+        None, description="Classification label (e.g. 'relevant') or score"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "success": True,
+                "message": "AI relevance classification completed",
+                "data": "relevant"
+            }
+        }
+
+
+class TopicInferenceSingleResponse(ResponseBase):
+    """Response for single document topic inference."""
+    data: Optional[List[Dict[str, Any]]] = Field(
+        None, description="Topic distribution: list of {id, probability} entries"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "success": True,
+                "message": "Topic inference completed",
+                "data": [
+                    {"id": "t0", "probability": 0.45},
+                    {"id": "t1", "probability": 0.30},
+                    {"id": "t2", "probability": 0.25}
+                ]
+            }
+        }
+
+
+class EmbeddingsSingleResponse(ResponseBase):
+    """Response for single document embeddings generation."""
+    data: Optional[List[float]] = Field(None, description="Embedding vector")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "success": True,
+                "message": "Embeddings generation completed",
+                "data": [0.0123, -0.0456, 0.0789, 0.0012]
+            }
+        }
+
+
+class OnDemandInferenceSingleResponse(ResponseBase):
+    """Response for single on-demand inference on an external document."""
+    document_id: Optional[str] = None
+    embeddings: Optional[List[float]] = None
+    topic_distribution: Optional[List[Dict[str, Any]]] = None
+    summary: Optional[str] = None
+    similar_documents: Optional[List[Dict[str, Any]]] = None
+    processing_time_ms: Optional[int] = None
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "success": True,
+                "message": "On-demand inference completed",
+                "document_id": "EXT-ABC12345",
+                "embeddings": [0.1, 0.2, 0.3],
+                "topic_distribution": [{"id": "t0", "probability": 0.4}, {"id": "t1", "probability": 0.6}],
+                "summary": None,
+                "similar_documents": [{"doc_id": "DOC-001", "similarity": 0.92}],
+                "processing_time_ms": 340
+            }
+        }
 
 
 # ======================================================
 # Health Check Response
 # ======================================================
-class HealthResponse(BaseModel):
+class HealthResponse(ResponseBase):
     """Health check response including Solr status."""
     status: str = Field(..., description="Overall status: 'healthy' or 'unhealthy'")
     timestamp: str = Field(..., description="ISO timestamp of check")
@@ -90,113 +289,291 @@ class HealthResponse(BaseModel):
     class Config:
         json_schema_extra = {
             "example": {
-                "status": "healthy",
-                "timestamp": "2026-02-04T10:30:00Z",
-                "solr_connected": True,
-                "version": "1.0.0"
+                "success": True, "message": None,
+                "status": "healthy", "timestamp": "2026-02-04T10:30:00Z",
+                "solr_connected": True, "version": "1.0.0"
             }
         }
 
 
 # ======================================================
-# INFRASTRUCTURE ADMINISTRATION SERVICES
+# Infrastructure Administration Responses
 # ======================================================
-class CollectionResponse(BaseResponse):
-    """Response for collection operations."""
+class CollectionResponse(ResponseBase):
+    """Response for collection operations (create / delete)."""
     collection: Optional[str] = None
 
+    class Config:
+        json_schema_extra = {
+            "example": {"success": True, "message": "Collection 'my_collection' created successfully", "collection": "my_collection"}
+        }
 
-class CollectionListResponse(BaseResponse):
+
+class CollectionListResponse(ResponseBase):
     """Response for listing collections."""
     collections: List[str] = []
 
+    class Config:
+        json_schema_extra = {
+            "example": {"success": True, "message": None, "collections": ["corpus_1", "corpus_2", "model_45_10_topics"]}
+        }
 
-class SolrQueryParams(BaseModel):
-    """Parameters for raw Solr queries."""
-    collection: str = Field(..., description="Collection name to query")
-    q: str = Field(..., description="Query string using standard query syntax")
-    q_op: Optional[QueryOperator] = Field(
-        None, alias="q.op", description="Default operator (AND/OR)")
-    fq: Optional[str] = Field(None, description="Filter query")
-    sort: Optional[str] = Field(
-        None, description="Sort order (e.g., 'field asc')")
-    start: Optional[int] = Field(0, ge=0, description="Offset for pagination")
-    rows: Optional[int] = Field(
-        10, ge=1, le=1000, description="Number of rows to return")
-    fl: Optional[str] = Field(None, description="Fields to return")
-    df: Optional[str] = Field(None, description="Default field")
+
+class SolrQueryResponse(ResponseBase):
+    """Response for raw Solr query execution."""
+    data: List[Dict[str, Any]] = []
+    num_found: int = 0
 
     class Config:
-        populate_by_name = True
+        json_schema_extra = {
+            "example": {"success": True, "message": None, "data": [{"id": "doc1", "title": "Document 1"}], "num_found": 1}
+        }
 
 
+class CorpusListResponse(ResponseBase):
+    """Response for listing corpora."""
+    corpora: List[str] = []
 
-class MetadataFieldsResponse(BaseResponse):
-    """Response for metadata fields."""
+    class Config:
+        json_schema_extra = {
+            "example": {"success": True, "message": None, "corpora": ["procurement_2023", "procurement_2024"]}
+        }
+
+
+class ModelsListResponse(ResponseBase):
+    """Response for listing all models."""
+    models: Dict[str, List[Dict[str, int]]] = {}
+
+    class Config:
+        json_schema_extra = {
+            "example": {"success": True, "message": None, "models": ["0_45_10_topics", "0_45_50_topics"]}
+        }
+
+
+class CorpusModelsResponse(ResponseBase):
+    """Response for listing models of a specific corpus."""
+    models: Dict[str, List[Dict[str, int]]] = {}
+
+    class Config:
+        json_schema_extra = {
+            "example": {"success": True, "message": None, "models": ["0_45_10_topics", "0_45_50_topics"]}
+        }
+
+
+class MetadataFieldsResponse(ResponseBase):
+    """Response for metadata fields queries."""
     fields: List[str] = []
 
+    class Config:
+        json_schema_extra = {
+            "example": {"success": True, "message": None, "fields": ["title", "date", "description", "amount"]}
+        }
 
-class DisplayConfigResponse(BaseResponse):
+
+class DisplayConfigResponse(ResponseBase):
     """Response for complete display configuration."""
     metadata_displayed: List[str] = []
     searchable_fields: List[str] = []
     active_filters: List[str] = []
 
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "success": True, "message": None,
+                "metadata_displayed": ["title", "date"],
+                "searchable_fields": ["title", "description"],
+                "active_filters": ["category", "year"]
+            }
+        }
 
-class CorpusListResponse(BaseResponse):
-    """Response for listing corpora."""
-    corpora: List[str] = []
+
+class IndexingResponse(ResponseBase):
+    """Response for corpus / model indexing operations."""
+    job_id: Optional[str] = None
+    status: str = "queued"
+    documents_processed: int = 0
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "success": True, "message": "Corpus 'procurement_2024' indexed successfully",
+                "job_id": None, "status": "completed", "documents_processed": 0
+            }
+        }
 
 
-class ModelsListResponse(BaseResponse):
-    """Response for listing models."""
-    models: Dict[str, List[Dict[str, int]]] = {}
+class ProcessingJobResponse(ResponseBase):
+    """Response for processing jobs (e.g. model indexing)."""
+    job_id: Optional[str] = None
+    status: str = "queued"
+    progress: Optional[float] = None
+    results: Optional[Dict[str, Any]] = None
 
-
-class CorpusModelsResponse(BaseResponse):
-    """Response for corpus models."""
-    models: Dict[str, List[Dict[str, int]]] = {}
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "success": True, "message": "Model '0_45_10_topics' indexed successfully",
+                "job_id": None, "status": "completed", "progress": None, "results": None
+            }
+        }
 
 
 # ======================================================
-# ENRICHMENT & INGESTION SERVICES
+# Exploitation Service Responses
 # ======================================================
-class DownloadRequest(BaseModel):
-    """Request for bulk data download."""
-    source: DataSource = Field(..., description="Data source")
-    start_date: Optional[str] = Field(None, description="Start date (YYYY-MM-DD)")
-    end_date: Optional[str] = Field(None, description="End date (YYYY-MM-DD)")
-    filters: Optional[Dict[str, Any]] = Field(None, description="Additional filters")
+class DataResponse(ResponseBase):
+    """
+    Generic data response for exploitation service endpoints.
+
+    The data field carries the query-specific payload (documents, metadata,
+    topic distributions, counts, year lists, etc.).
+    """
+    data: Any = None
+
+    class Config:
+        json_schema_extra = {
+            "example": {"success": True, "message": None, "data": [{"id": "doc1", "title": "Document 1", "score": 0.95}]}
+        }
 
 
+# ══════════════════════════════════════════════════════
+#  REQUEST SCHEMAS
+# ══════════════════════════════════════════════════════
+
 # ======================================================
-# TEXT EXTRACTION SCHEMAS
+# Request Base Classes
 # ======================================================
-class TextExtractionBatchRequest(BaseModel):
-    """Request for batch PDF text extraction from parquet file."""
+
+class BatchRequestBase(BaseModel):
+    """
+    Common fields shared by every batch processing request.
+
+    Every batch module request inherits from this and adds its own
+    module-specific parameters.
+    """
     parquet_path: str = Field(..., description="Path to the parquet file containing documents")
-    text_column: str = Field("pdf_path", description="Column name containing PDF paths")
+    apply_column: str = Field("text", description="Column name containing the information to apply the processing on (e.g. text for summarization, pdf_path for text extraction)")
     id_column: str = Field("doc_id", description="Column name containing document IDs")
-    normalize: bool = Field(True, description="Apply text normalization")
-    output_path: Optional[str] = Field(None, description="Path to save extracted text")
+    output_path: Optional[str] = Field(None, description="Path to save processing results")
+
+
+class SingleRequestBase(BaseModel):
+    """
+    Common fields shared by every single-document processing request.
+
+    Every single-document module request inherits from this and adds its
+    own module-specific parameters.
+
+    Note: TextExtractionSingleRequest overrides these fields because
+    it works with PDF files rather than plain text.
+    """
+    document_id: Optional[str] = Field(None, description="Document ID (if already indexed)")
+    text: Optional[str] = Field(None, description="Raw text to process (if not indexed)")
+
+
+# ======================================================
+# Module-Specific Batch Requests
+# ======================================================
+class TextExtractionBatchRequest(BatchRequestBase):
+    """Batch PDF text extraction from a parquet file of PDF paths."""
+    apply_column: str = Field("pdf_path", description="Column name containing PDF file paths")
+    normalize: bool = Field(True, description="Apply text normalisation")
 
     class Config:
         json_schema_extra = {
             "example": {
                 "parquet_path": "/data/documents/batch_2024.parquet",
-                "text_column": "pdf_path",
-                "id_column": "doc_id",
+                "apply_column": "pdf_path", "id_column": "doc_id",
                 "normalize": True
             }
         }
 
 
+class SummarizationBatchRequest(BatchRequestBase):
+    """Batch document summarisation."""
+    focus_dimensions: Optional[List[str]] = Field(None, description="Focus dimensions for summary")
+    include_traceability: bool = Field(True, description="Include traceability to original text")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "parquet_path": "/data/documents/batch_2024.parquet",
+                "apply_column": "full_text", "id_column": "doc_id",
+            }
+        }
+
+
+class MetadataExtractionBatchRequest(BatchRequestBase):
+    """Batch automatic metadata extraction."""
+    metadata_fields: List[MetadataField] = Field(..., description="Metadata fields to extract")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "parquet_path": "/data/documents/batch_2024.parquet",
+                "apply_column": "full_text", "id_column": "doc_id",
+                "metadata_fields": ["cpv", "objective"],
+            }
+        }
+
+
+class AIRelevanceBatchRequest(BatchRequestBase):
+    """Batch AI relevance classification."""
+    output_format: str = Field("binary", description="Output format: 'binary' or 'score'")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "parquet_path": "/data/documents/batch_2024.parquet",
+                "apply_column": "full_text", "id_column": "doc_id",
+                "output_format": "score"
+            }
+        }
+
+
+class TopicInferenceBatchRequest(BatchRequestBase):
+    """Batch topic inference using a trained topic model."""
+    model_name: str = Field(..., description="Name of the trained topic model to use")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "parquet_path": "/data/documents/batch_2024.parquet",
+                "apply_column": "full_text", "id_column": "doc_id",
+                "model_name": "topic_model_v1"
+            }
+        }
+
+
+class EmbeddingsBatchRequest(BatchRequestBase):
+    """Batch embeddings generation."""
+    model_type: str = Field("multi-qa-mpnet-base-dot-v1", description="Embedding model type")
+    batch_size: int = Field(32, ge=1, le=128, description="Batch size for processing")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "parquet_path": "/data/documents/batch_2024.parquet",
+                "apply_column": "full_text", "id_column": "doc_id",
+                "model_type": "multi-qa-mpnet-base-dot-v1", "batch_size": 32
+            }
+        }
+
+
+# ======================================================
+# Module-Specific Single Requests
+# ======================================================
 class TextExtractionSingleRequest(BaseModel):
-    """Request for single document PDF text extraction (JSON body, for path or base64)."""
+    """
+    Single PDF text extraction.
+
+    Does NOT inherit from SingleRequestBase because it works with
+    PDF files (path or base64) rather than plain text.
+    """
     document_id: Optional[str] = Field(None, description="Document ID (auto-generated if not provided)")
-    pdf_path: Optional[str] = Field(None, description="Path to the PDF file (if not in system)")
-    pdf_content: Optional[str] = Field(None, description="Base64 encoded PDF content")
-    normalize: bool = Field(True, description="Apply text normalization")
+    pdf_path: Optional[str] = Field(None, description="Path to the PDF file")
+    pdf_content: Optional[str] = Field(None, description="Base64-encoded PDF content")
+    normalize: bool = Field(True, description="Apply text normalisation")
 
     class Config:
         json_schema_extra = {
@@ -208,116 +585,36 @@ class TextExtractionSingleRequest(BaseModel):
         }
 
 
-# ======================================================
-# SUMMARIZATION SCHEMAS
-# ======================================================
-class SummarizationBatchRequest(BaseModel):
-    """Request for batch document summarization from parquet file."""
-    parquet_path: str = Field(..., description="Path to the parquet file containing documents")
-    text_column: str = Field("text", description="Column name containing document text")
-    id_column: str = Field("doc_id", description="Column name containing document IDs")
+class SummarizationSingleRequest(SingleRequestBase):
+    """Single document summarisation."""
     focus_dimensions: Optional[List[str]] = Field(None, description="Focus dimensions for summary")
     include_traceability: bool = Field(True, description="Include traceability to original text")
-    output_path: Optional[str] = Field(None, description="Path to save summaries")
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "parquet_path": "/data/documents/batch_2024.parquet",
-                "text_column": "full_text",
-                "id_column": "doc_id",
-                "focus_dimensions": ["technical", "economic"],
-                "include_traceability": True
-            }
-        }
-
-
-class SummarizationSingleRequest(BaseModel):
-    """Request for single document summarization."""
-    document_id: Optional[str] = Field(None, description="Document ID (if indexed)")
-    text: Optional[str] = Field(None, description="Raw text to summarize (if not indexed)")
-    focus_dimensions: Optional[List[str]] = Field(None, description="Focus dimensions for summary")
-    include_traceability: bool = Field(True, description="Include traceability to original text")
-    max_length: Optional[int] = Field(None, description="Maximum summary length")
 
     class Config:
         json_schema_extra = {
             "example": {
                 "text": "El presente contrato tiene por objeto...",
                 "focus_dimensions": ["technical"],
-                "include_traceability": True,
-                "max_length": 500
+                "include_traceability": True
             }
         }
 
 
-# ======================================================
-# METADATA EXTRACTION SCHEMAS
-# ======================================================
-class MetadataExtractionBatchRequest(BaseModel):
-    """Request for batch automatic metadata extraction from parquet file."""
-    parquet_path: str = Field(..., description="Path to the parquet file containing documents")
-    text_column: str = Field("text", description="Column name containing document text")
-    id_column: str = Field("doc_id", description="Column name containing document IDs")
-    metadata_fields: List[str] = Field(..., description="Metadata fields to extract")
-    validation: bool = Field(True, description="Validate extracted metadata")
-    output_path: Optional[str] = Field(None, description="Path to save extracted metadata")
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "parquet_path": "/data/documents/batch_2024.parquet",
-                "text_column": "full_text",
-                "id_column": "doc_id",
-                "metadata_fields": ["organization", "budget", "deadline"],
-                "validation": True
-            }
-        }
-
-
-class MetadataExtractionSingleRequest(BaseModel):
-    """Request for single document metadata extraction."""
-    document_id: Optional[str] = Field(None, description="Document ID (if indexed)")
-    text: Optional[str] = Field(None, description="Raw text to extract metadata from (if not indexed)")
-    metadata_fields: List[str] = Field(..., description="Metadata fields to extract")
-    validation: bool = Field(True, description="Validate extracted metadata")
+class MetadataExtractionSingleRequest(SingleRequestBase):
+    """Single document metadata extraction."""
+    metadata_fields: List[MetadataField] = Field(..., description="Metadata fields to extract")
 
     class Config:
         json_schema_extra = {
             "example": {
                 "text": "El presente contrato tiene por objeto...",
-                "metadata_fields": ["organization", "budget", "deadline"],
-                "validation": True
+                "metadata_fields": ["cpv", "objective"],
             }
         }
 
 
-# ======================================================
-# AI RELEVANCE CLASSIFICATION SCHEMAS
-# ======================================================
-class AIRelevanceBatchRequest(BaseModel):
-    """Request for batch AI relevance classification from parquet file."""
-    parquet_path: str = Field(..., description="Path to the parquet file containing documents")
-    text_column: str = Field("text", description="Column name containing document text")
-    id_column: str = Field("doc_id", description="Column name containing document IDs")
-    output_format: str = Field("binary", description="Output format: 'binary' or 'score'")
-    output_path: Optional[str] = Field(None, description="Path to save classification results")
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "parquet_path": "/data/documents/batch_2024.parquet",
-                "text_column": "full_text",
-                "id_column": "doc_id",
-                "output_format": "score"
-            }
-        }
-
-
-class AIRelevanceSingleRequest(BaseModel):
-    """Request for single document AI relevance classification."""
-    document_id: Optional[str] = Field(None, description="Document ID (if indexed)")
-    text: Optional[str] = Field(None, description="Raw text to classify (if not indexed)")
+class AIRelevanceSingleRequest(SingleRequestBase):
+    """Single document AI relevance classification."""
     output_format: str = Field("binary", description="Output format: 'binary' or 'score'")
 
     class Config:
@@ -329,31 +626,9 @@ class AIRelevanceSingleRequest(BaseModel):
         }
 
 
-# ======================================================
-# TOPIC INFERENCE SCHEMAS
-# ======================================================
-class TopicInferenceBatchRequest(BaseModel):
-    """Request for batch topic inference from parquet file."""
-    parquet_path: str = Field(..., description="Path to the parquet file containing documents")
-    text_column: str = Field("text", description="Column name containing document text")
-    id_column: str = Field("doc_id", description="Column name containing document IDs")
-    model_name: str = Field(..., description="Name of the trained topic model to use")
-    output_path: Optional[str] = Field(None, description="Path to save inference results")
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "parquet_path": "/data/documents/batch_2024.parquet",
-                "text_column": "full_text",
-                "id_column": "doc_id",
-                "model_name": "topic_model_v1"
-            }
-        }
-
-
-class TopicInferenceSingleRequest(BaseModel):
-    """Request for single document topic inference."""
-    text: str = Field(..., description="Text to analyze for topic distribution")
+class TopicInferenceSingleRequest(SingleRequestBase):
+    """Single document topic inference."""
+    text: str = Field(..., description="Text to analyse for topic distribution")
     model_name: str = Field(..., description="Name of the trained topic model to use")
 
     class Config:
@@ -365,348 +640,360 @@ class TopicInferenceSingleRequest(BaseModel):
         }
 
 
-# ======================================================
-# EMBEDDINGS GENERATION SCHEMAS
-# ======================================================
-class EmbeddingsBatchRequest(BaseModel):
-    """Request for batch embeddings generation from parquet file."""
-    parquet_path: str = Field(..., description="Path to the parquet file containing documents")
-    text_column: str = Field("text", description="Column name containing document text")
-    id_column: str = Field("doc_id", description="Column name containing document IDs")
-    model_type: str = Field("sentence-transformers", description="Embedding model type")
-    batch_size: int = Field(32, ge=1, le=128, description="Batch size for processing")
-    output_path: Optional[str] = Field(None, description="Path to save embeddings")
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "parquet_path": "/data/documents/batch_2024.parquet",
-                "text_column": "full_text",
-                "id_column": "doc_id",
-                "model_type": "sentence-transformers",
-                "batch_size": 32
-            }
-        }
-
-
-class EmbeddingsSingleRequest(BaseModel):
-    """Request for single document embeddings generation."""
-    document_id: Optional[str] = Field(None, description="Document ID (if indexed)")
-    text: Optional[str] = Field(None, description="Raw text to generate embeddings for (if not indexed)")
-    model_type: str = Field("sentence-transformers", description="Embedding model type")
+class EmbeddingsSingleRequest(SingleRequestBase):
+    """Single document embeddings generation."""
+    model_type: str = Field("multi-qa-mpnet-base-dot-v1", description="Embedding model type")
 
     class Config:
         json_schema_extra = {
             "example": {
                 "text": "El presente contrato tiene por objeto...",
-                "model_type": "sentence-transformers"
+                "model_type": "multi-qa-mpnet-base-dot-v1"
             }
         }
 
 
-# Legacy schemas (kept for backwards compatibility)
-class TextExtractionRequest(BaseModel):
-    """DEPRECATED: Use TextExtractionBatchRequest or TextExtractionSingleRequest."""
-    document_ids: List[str] = Field(..., description="Document IDs to process")
-    normalize: bool = Field(True, description="Apply text normalization")
+# ======================================================
+# Pipeline Request (full ingestion orchestration)
+# ======================================================
+class PipelineModuleConfig(BaseModel):
+    """
+    Per-module configuration for the pipeline.
 
+    Only the fields relevant to the selected modules need to be provided.
+    Irrelevant fields are ignored.
+    """
+    # Download
+    source: Optional[DataSource] = Field(None, description="Data source (required if download is selected)")
+    start_date: Optional[str] = Field(None, description="Start date for download (YYYY-MM-DD)")
+    end_date: Optional[str] = Field(None, description="End date for download (YYYY-MM-DD)")
+    download_filters: Optional[Dict[str, Any]] = Field(None, description="Additional download filters")
 
-class SummarizationRequest(BaseModel):
-    """DEPRECATED: Use SummarizationBatchRequest or SummarizationSingleRequest."""
-    document_ids: List[str] = Field(..., description="Document IDs to summarize")
-    focus_dimensions: Optional[List[str]] = Field(None, description="Focus dimensions for summary")
-    include_traceability: bool = Field(True, description="Include traceability to original text")
+    # Text extraction
+    normalize: bool = Field(True, description="Apply text normalisation during extraction")
 
+    # Summarisation
+    focus_dimensions: Optional[List[str]] = Field(None, description="Focus dimensions for summaries")
+    include_traceability: bool = Field(True, description="Include traceability in summaries")
 
-class MetadataExtractionRequest(BaseModel):
-    """DEPRECATED: Use MetadataExtractionBatchRequest or MetadataExtractionSingleRequest."""
-    document_ids: List[str] = Field(..., description="Document IDs to process")
-    metadata_fields: List[str] = Field(..., description="Metadata fields to extract")
-    validation: bool = Field(True, description="Validate extracted metadata")
+    # Metadata extraction
+    metadata_fields: Optional[List[str]] = Field(None, description="Metadata fields to extract (required if metadata_enrichment is selected)")
+    metadata_validation: bool = Field(True, description="Validate extracted metadata")
 
+    # AI relevance classification
+    relevance_output_format: str = Field("binary", description="'binary' or 'score'")
 
-class AIRelevanceRequest(BaseModel):
-    """DEPRECATED: Use AIRelevanceBatchRequest or AIRelevanceSingleRequest."""
-    document_ids: List[str] = Field(..., description="Document IDs to classify")
-    output_format: str = Field("binary", description="Output format: 'binary' or 'score'")
+    # Topic modelling
+    model_name: Optional[str] = Field(None, description="Topic model name (required if topic_modeling is selected)")
 
-
-class IngestionRequest(BaseModel):
-    """Request for triggering data ingestion pipeline."""
-    corpus_name: str = Field(..., description="Name for the corpus")
-    source_path: Optional[str] = Field(None, description="Path to source data")
-    extract_text: bool = Field(True, description="Extract text from PDFs")
-    normalize: bool = Field(True, description="Apply text normalization")
-    modules: List[ProcessingModule] = Field(
-        default=[ProcessingModule.ALL],
-        description="Processing modules to execute"
-    )
-    async_execution: bool = Field(
-        default=True,
-        description="Execute asynchronously"
-    )
+    # Embeddings
+    embedding_model_type: str = Field("multi-qa-mpnet-base-dot-v1", description="Embedding model type")
+    embedding_batch_size: int = Field(32, ge=1, le=128, description="Batch size for embedding generation")
 
     class Config:
         json_schema_extra = {
             "example": {
-                "corpus_name": "procurement_2024",
-                "extract_text": True,
+                "source": "TED",
                 "normalize": True,
-                "modules": ["ingestion", "embeddings"],
-                "async_execution": True
+                "focus_dimensions": ["technical"],
+                "metadata_fields": ["organization", "budget"],
+                "model_name": "topic_model_v1"
             }
         }
 
 
-class IngestionResponse(BaseResponse):
-    """Response for ingestion operations."""
-    job_id: Optional[str] = None
-    status: str = "queued"
-    documents_processed: int = 0
-
-
-class TopicModelTrainingRequest(BaseModel):
-    """Request for topic model training."""
-    corpus_name: str = Field(..., description="Corpus for topic modeling")
-    model_name: str = Field(..., description="Name for the model")
-    num_topics: int = Field(
-        10, ge=2, description="Number of topics")
-
-
-class ProcessingJobResponse(BaseResponse):
-    """Response for processing jobs."""
-    job_id: Optional[str] = None
-    status: str = "queued"
-    progress: Optional[float] = None
-    results: Optional[Dict[str, Any]] = None
-
-
-# --- On-Demand Inference (External Documents) ---
-class OnDemandInferenceBatchRequest(BaseModel):
+class PipelineRequest(BaseModel):
     """
-    Request for batch on-demand inference on external (non-indexed) documents.
-    Processes multiple documents from a parquet file.
+    Request for triggering a full ingestion pipeline.
+
+    Selects which modules to execute and provides their configuration
+    in a single payload.  Modules are always executed in dependency
+    order regardless of the order they appear in the modules list::
+
+        download --> pdf_extraction --> summarization | metadata_enrichment |
+        ai_relevance_classification | topic_modeling | embeddings --> ingestion
+
+    Use PipelineModule.ALL to run every module.
     """
-    parquet_path: str = Field(..., description="Path to parquet file with documents to process")
-    text_column: str = Field("text", description="Column name containing the text")
+    modules: List[PipelineModule] = Field(
+        default=[PipelineModule.ALL],
+        description="Pipeline modules to execute (order is enforced automatically)"
+    )
+    config: PipelineModuleConfig = Field(
+        default_factory=PipelineModuleConfig,
+        description="Per-module configuration (only relevant fields need to be set)"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "modules": ["download", "pdf_extraction", "summarization", "embeddings", "ingestion"],
+                "config": {
+                    "source": "TED",
+                    "start_date": "2024-01-01",
+                    "normalize": True,
+                    "focus_dimensions": ["technical", "economic"],
+                    "embedding_model_type": "sentence-transformers"
+                }
+            }
+        }
+
+
+# ======================================================
+# On-Demand Inference Requests (external documents)
+# ======================================================
+class OnDemandInferenceBatchRequest(BatchRequestBase):
+    """
+    Batch on-demand inference on external (non-indexed) PDF documents.
+
+    Processes multiple documents from a parquet file through the
+    requested operations.
+    """
+    parquet_path: str = Field(..., description="Path to the parquet file containing documents")
     id_column: Optional[str] = Field(None, description="Column name for document IDs")
-    operations: List[str] = Field(
-        default=["embeddings"],
-        description="Operations: embeddings, topics, summary, all"
+    pdf_column: str = Field(..., description="Column name containing PDF file paths or base64 content")
+    operations: List[ProcessingModule] = Field(
+        default=[ProcessingModule.ALL],
+        description="Processing modules to apply"
     )
     model_name: Optional[str] = Field(
-        None, description="Model name (required for topic inference)")
-    compare_with_index: bool = Field(
-        False,
-        description="Compare results with existing index to find similar documents"
+        None, description="Model name (required for topic inference)"
     )
-    corpus_collection: Optional[str] = Field(
-        None,
-        description="Corpus collection to compare against (required if compare_with_index=True)"
-    )
-    rows_per_doc: Optional[int] = Field(
-        5, description="Number of similar documents to return per document")
 
     class Config:
         json_schema_extra = {
             "example": {
                 "parquet_path": "/data/external_docs.parquet",
-                "text_column": "content",
                 "id_column": "doc_id",
-                "operations": ["embeddings", "topics"],
-                "model_name": "my_topic_model",
-                "compare_with_index": True,
-                "corpus_collection": "np_corpus",
-                "rows_per_doc": 5
+                "pdf_column": "pdf_content",
+                "operations": ["all"],
+                "model_name": "my_topic_model"
             }
         }
 
 
 class OnDemandInferenceSingleRequest(BaseModel):
     """
-    Request for on-demand inference on a single external (non-indexed) document.
-    Allows real-time processing and comparison with existing index.
+    On-demand inference on a single external (non-indexed) PDF document.
+
+    Accepts a PDF via file path or base64-encoded content, processes it
+    through the requested operations and optionally compares results
+    against an existing index.
     """
-    text: str = Field(..., description="Text/document to process")
-    document_id: Optional[str] = Field(None, description="Optional document identifier")
-    operations: List[str] = Field(
-        default=["embeddings"],
-        description="Operations: embeddings, topics, summary, all"
+    document_id: Optional[str] = Field(None, description="Document ID (auto-generated if not provided)")
+    pdf_path: Optional[str] = Field(None, description="Path to the PDF file")
+    pdf_content: Optional[str] = Field(None, description="Base64-encoded PDF content")
+    operations: List[ProcessingModule] = Field(
+        default=[ProcessingModule.ALL],
+        description="Processing modules to apply"
     )
     model_name: Optional[str] = Field(
-        None, description="Model name (required for topic inference)")
-    compare_with_index: bool = Field(
-        True,
-        description="Compare results with existing index to find similar documents"
+        None, description="Model name (required for topic inference)"
     )
-    corpus_collection: Optional[str] = Field(
-        None,
-        description="Corpus collection to compare against"
-    )
-    start: Optional[int] = Field(
-        0, ge=0, description="Offset for comparison results")
-    rows: Optional[int] = Field(
-        10, description="Number of similar documents to return")
 
     class Config:
         json_schema_extra = {
             "example": {
-                "text": "Supply of computer equipment for offices...",
                 "document_id": "EXT-001",
-                "operations": ["embeddings", "topics"],
-                "model_name": "my_topic_model",
-                "compare_with_index": True,
-                "corpus_collection": "np_corpus",
-                "rows": 10
+                "pdf_path": "/data/pdfs/external_document.pdf",
+                "operations": ["all"],
+                "model_name": "my_topic_model"
             }
         }
 
+class ModelIndexRequest(BaseModel):
+    """Request for indexing a topic model into Solr."""
+    model_name: str = Field(..., description="Name of the model folder", min_length=1)
 
-class OnDemandInferenceResponse(BaseResponse):
-    """Response for single on-demand inference."""
-    document_id: Optional[str] = None
-    embeddings: Optional[List[float]] = None
-    topic_distribution: Optional[List[Dict[str, Any]]] = None
-    summary: Optional[str] = None
-    similar_documents: Optional[List[Dict[str, Any]]] = None
-    processing_time_ms: Optional[int] = None
+    class Config:
+        json_schema_extra = {"example": {"model_name": "0_45_10_topics"}}
+
+
+class TopicModelTrainingRequest(BaseModel):
+    """Request for topic model training."""
+    corpus_name: str = Field(..., description="Corpus for topic modelling")
+    model_name: str = Field(..., description="Name for the model")
+    num_topics: int = Field(10, ge=2, description="Number of topics")
+    # other params will come here.
 
 
 # ======================================================
-# EXPLOITATION SERVICES
+# Admin-Specific Requests
 # ======================================================
-class MetadataSearchQuery(BaseModel):
-    """Query for exact metadata search."""
-    corpus_collection: str = Field(...,
-                                   description="Corpus collection to search")
-    field: str = Field(..., description="Metadata field to search")
-    value: str = Field(..., description="Value to search for")
-    start: Optional[int] = Field(0, ge=0, description="Offset")
-    rows: Optional[int] = Field(10, description="Number of rows")
+class CorpusIndexRequest(BaseModel):
+    """Request for indexing a corpus into Solr."""
+    corpus_name: str = Field(..., description="Name of the corpus to index (without extension)", min_length=1)
 
+    class Config:
+        json_schema_extra = {"example": {"corpus_name": "procurement_2024"}}
+        
+class CollectionCreateRequest(BaseModel):
+    """Request body for creating a collection."""
+    collection: str = Field(..., description="Name of the collection to create", min_length=1)
+    
+    class Config:
+        json_schema_extra = {
+            "example": {"collection": "my_new_collection"}
+        }
 
-class TextSearchQuery(BaseModel):
-    """Query for text search in searchable fields."""
-    corpus_collection: str = Field(..., description="Corpus collection")
-    query_string: str = Field(..., description="Search string")
-    start: Optional[int] = Field(0, ge=0, description="Offset")
-    rows: Optional[int] = Field(None, description="Number of rows")
-
-
-class TopicLabelsQuery(BaseModel):
-    """Query for topic labels."""
-    start: Optional[int] = Field(0, ge=0, description="Offset")
-    rows: Optional[int] = Field(None, description="Number of rows")
-
-
-class TopicDocumentsQuery(BaseModel):
-    """Query for documents by topic."""
-    corpus_collection: str = Field(..., description="Corpus collection")
-    topic_id: str = Field(..., description="Topic ID")
-    start: Optional[int] = Field(0, ge=0, description="Offset")
-    rows: Optional[int] = Field(None, description="Number of rows")
-
-
-class TopicInfoResponse(BaseResponse):
-    """Response for topic information."""
-    topics: List[Dict[str, Any]] = []
-    model_info: Optional[Dict[str, Any]] = None
-
-
-class SemanticSearchQuery(BaseModel):
-    """Query for semantic similarity search."""
-    corpus_collection: str = Field(..., description="Corpus collection")
-    query_text: str = Field(...,
-                            description="Text to search for similar documents")
-    search_method: str = Field(
-        "embeddings",
-        description="Method: embeddings (BERT), topic_model, word2vec"
+class SearchableFieldsRequest(BaseModel):
+    """Request body for modifying searchable fields."""
+    searchable_fields: str = Field(
+        ..., 
+        description="Fields to add/remove (comma-separated)",
+        min_length=1
     )
-    keyword_filter: Optional[str] = Field(
-        None, description="Optional keyword filter")
-    start: Optional[int] = Field(0, ge=0, description="Offset")
-    rows: Optional[int] = Field(None, description="Number of rows")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {"searchable_fields": "title,description,content"}
+        }
+        
+class SolrQueryParams(BaseModel):
+    """
+    Query parameters for raw Solr queries.
+
+    Used as a dependency via Depends(SolrQueryParams) on the
+    execute_raw_query endpoint.  The collection field is NOT
+    included here because it is a path parameter.
+    """
+    q: str = Field(..., description="Query string using standard query syntax")
+    q_op: Optional[QueryOperator] = Field(None, alias="q.op", description="Default operator (AND/OR)")
+    fq: Optional[str] = Field(None, description="Filter query")
+    sort: Optional[str] = Field(None, description="Sort order (e.g., 'field asc')")
+    start: Optional[int] = Field(0, ge=0, description="Offset for pagination")
+    rows: Optional[int] = Field(10, ge=1, le=1000, description="Number of rows to return")
+    fl: Optional[str] = Field(None, description="Fields to return")
+    df: Optional[str] = Field(None, description="Default field")
+
+    class Config:
+        populate_by_name = True
+        
+# ======================================================
+# Exploitation Search — common filter/pagination params
+# ======================================================
+class MetadataFilter(BaseModel):
+    """
+    Optional metadata filters applicable to all search endpoints.
+
+    Allows narrowing results by year, CPV code, or any additional
+    key-value metadata.
+    """
+    year: Optional[int] = Field(None, description="Filter by publication year", ge=1900, le=2100)
+    cpv: Optional[str] = Field(None, description="Filter by CPV code (Common Procurement Vocabulary)")
+    extra: Optional[Dict[str, str]] = Field(
+        None,
+        description="Additional metadata key-value filters (e.g. {\"organization\": \"CSIC\"})"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {"year": 2024, "cpv": "72000000", "extra": {"organization": "CSIC"}}
+        }
+
+
+class SearchPagination(BaseModel):
+    """Common pagination parameters for search endpoints."""
+    start: int = Field(0, ge=0, description="Offset for pagination")
+    rows: int = Field(10, ge=1, le=1000, description="Number of results to return")
+
+
+class SearchRequestBase(BaseModel):
+    """
+    Common fields shared by all search/similarity requests.
+
+    - ``filter_query``: raw Solr ``fq`` string for advanced users.
+    - ``filters``: structured metadata filters (year, CPV, extras).
+    - ``pagination``: start + rows.
+
+    Both ``filter_query`` and ``filters`` can be provided simultaneously;
+    the endpoint will combine them with AND.
+    """
+    filter_query: Optional[str] = Field(
+        None, description="Raw Solr filter query (fq) for advanced filtering"
+    )
+    filters: Optional[MetadataFilter] = Field(None, description="Structured metadata filters")
+    pagination: SearchPagination = Field(default_factory=SearchPagination)
+
+
+class SemanticSearchByTextRequest(SearchRequestBase):
+    """Request for semantic search by text query."""
+    query_text: str = Field(..., description="Text to search for semantically")
 
     class Config:
         json_schema_extra = {
             "example": {
-                "corpus_collection": "np_corpus",
-                "query_text": "Contrato de suministro de material de oficina",
-                "search_method": "embeddings",
-                "rows": 10
+                "query_text": "inteligencia artificial en contratación pública",
+                "filter_query": "source:TED",
+                "filters": {"year": 2024, "cpv": "72000000"},
+                "pagination": {"start": 0, "rows": 10}
             }
         }
 
 
-class SimilarDocumentsQuery(BaseModel):
-    """Query for finding similar documents by document ID."""
-    corpus_collection: str = Field(..., description="Corpus collection")
-    doc_id: str = Field(..., description="Reference document ID")
-    model_name: str = Field(...,
-                            description="Model for similarity computation")
-    start: Optional[int] = Field(0, ge=0, description="Offset")
-    rows: Optional[int] = Field(None, description="Number of rows")
+class ThematicSearchByTextRequest(SearchRequestBase):
+    """Request for thematic search by text query using topic model inference."""
+    query_text: str = Field(..., description="Text to search for thematically")
+    model_name: str = Field(..., description="Topic model name for inference")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "query_text": "suministro de equipos informáticos",
+                "model_name": "topic_model_v1",
+                "filters": {"year": 2024},
+                "pagination": {"start": 0, "rows": 10}
+            }
+        }
 
 
-class DocumentMetadataResponse(BaseResponse):
-    """Response for document metadata."""
-    doc_id: str
-    metadata: Dict[str, Any] = {}
+class WordSimilaritySearchRequest(SearchRequestBase):
+    """Request for word-level semantic search using Word2Vec."""
+    word: str = Field(..., description="Search keyword")
+    model_name: str = Field(..., description="Embeddings model name")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "word": "ciberseguridad",
+                "model_name": "w2v_model_v1",
+                "filters": {"cpv": "72000000"},
+                "pagination": {"start": 0, "rows": 10}
+            }
+        }
 
 
-class DocumentThetasResponse(BaseResponse):
-    """Response for document-topic distribution."""
-    doc_id: str
-    model_name: str
-    thetas: List[Dict[str, Any]] = []
+class SimilarByDocumentRequest(SearchRequestBase):
+    """
+    Request for finding documents similar to one or more existing documents.
+
+    Used by both semantic (BERT) and thematic (topic model) similarity
+    endpoints.  Accepts a list of document IDs to enable multi-document
+    similarity queries.
+    """
+    doc_ids: List[str] = Field(..., description="One or more reference document IDs", min_length=1)
+    model_name: Optional[str] = Field(None, description="Topic model name (required for thematic similarity)")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "doc_ids": ["DOC-2024-001", "DOC-2024-042"],
+                "model_name": "topic_model_v1",
+                "filters": {"year": 2024},
+                "pagination": {"start": 0, "rows": 10}
+            }
+        }
 
 
-class IndicatorsResponse(BaseResponse):
-    """Response for corpus indicators."""
-    total_documents: int = 0
-    years_available: List[int] = []
-    document_count_by_year: Optional[Dict[int, int]] = None
-    topics_distribution: Optional[Dict[str, Any]] = None
+class TemporalSearchRequest(SearchRequestBase):
+    """Request for retrieving documents by year with metadata filters."""
+    year: int = Field(..., description="Publication year", ge=1900, le=2100)
 
-
-class TemporalSearchQuery(BaseModel):
-    """Query for temporal/year-based search."""
-    corpus_collection: str = Field(..., description="Corpus collection")
-    year: Optional[int] = Field(None, description="Specific year")
-    start_year: Optional[int] = Field(None, description="Start of range")
-    end_year: Optional[int] = Field(None, description="End of range")
-    sort_by: str = Field("date:desc", description="Sort specification")
-    keyword: Optional[str] = Field("*", description="Keyword filter")
-    searchable_field: Optional[str] = Field("*", description="Field to search")
-    start: Optional[int] = Field(0, ge=0, description="Offset")
-    rows: Optional[int] = Field(None, description="Number of rows")
-
-
-class RecommendationQuery(BaseModel):
-    """Query for document recommendations."""
-    corpus_collection: str = Field(..., description="Corpus collection")
-    doc_id: Optional[str] = Field(
-        None, description="Document ID for similarity-based")
-    query_text: Optional[str] = Field(
-        None, description="Text for semantic recommendations")
-    recommendation_type: str = Field(
-        "similar",
-        description="Type: similar (by doc_id), semantic (by text), topic_based"
-    )
-    limit: int = Field(10, ge=1, le=100, description="Max recommendations")
-
-
-class RecommendationResponse(BaseResponse):
-    """Response for recommendations."""
-    recommendations: List[Dict[str, Any]] = []
-    total: int = 0
-    recommendation_type: str = ""
-
-
-class SearchResponse(BaseResponse):
-    """Generic response for search operations."""
-    results: List[Dict[str, Any]] = []
-    total: int = 0
-    start: int = 0
-    rows: int = 10
-    query_time_ms: Optional[int] = None
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "year": 2024,
+                "filters": {"cpv": "72000000"},
+                "pagination": {"start": 0, "rows": 20}
+            }
+        }

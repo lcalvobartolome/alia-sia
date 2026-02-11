@@ -6,6 +6,9 @@ services:
       - 10083:10083
     environment:
       SOLR_URL: http://solr:8983
+      SIA_MASTER_KEY: ${SIA_MASTER_KEY:-master-key-change-in-production}
+      API_KEYS_FILE: /config/api_keys.json
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:8080}
       #NP_TOOLS_URL: http://np-tools:102
     depends_on:
       - solr
@@ -13,7 +16,7 @@ services:
       #networks:
       #  - np-net
     volumes:
-      - ../data:/data/source
+      - ../data:/data
       - ./sia-config:/config
     deploy:
       resources:

@@ -212,3 +212,4 @@ db/datasolr-plugins/NP-solr-dist-plugin/NP-solr-dist-plugin.jar
 db/data/zoo/logs/
 solr-plugins
 db
+sia-config/api_keys.json

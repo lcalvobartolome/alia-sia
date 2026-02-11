@@ -8,32 +8,40 @@ and dynamic system configuration:
 - Display configuration: metadata, visible fields, active filters
 - API key management: generation, listing, revocation
 
-Author: Lorena Calvo-Bartolomé
+Response conventions:
+- All responses extend ResponseBase (success + message).
+- Error responses use ErrorResponse.
+
+Author: Lorena Calvo-Bartolome
 Date: 27/03/2023
 Modified: 04/02/2026 (Migrated to FastAPI and reorganized)
 """
 
-from typing import Any, Dict, Optional
-from fastapi import APIRouter, Depends, Request, Query # type: ignore
+from typing import Optional
+from fastapi import APIRouter, Depends, Request, Query, Path, Body # type: ignore
+from pydantic import BaseModel, Field
 from src.api.schemas import (
-    BaseResponse,
+    CollectionCreateRequest,
+    ResponseBase,
     CollectionResponse,
     CollectionListResponse,
-    MetadataFieldsResponse,
+    SolrQueryParams,
+    SolrQueryResponse,
     CorpusListResponse,
     ModelsListResponse,
     CorpusModelsResponse,
-    ErrorResponse,
-    QueryOperator,
 )
 from src.api.exceptions import (
+    APIException,
     ConflictException,
     NotFoundException,
-    SolrException
+    SolrException,
+    UnauthorizedException,
+    ValidationException,
+    error_responses,
 )
 from src.api.auth import (
     api_key_manager,
-    verify_api_key,
     verify_master_key,
     APIKeyCreate,
     APIKeyResponse,
@@ -41,34 +49,36 @@ from src.api.auth import (
     APIKeyInfo,
 )
 
+# ======================================================
+# Router
+# ======================================================
 router = APIRouter(
     prefix="/admin",
     tags=["1. Infrastructure Administration"],
-    responses={
-        400: {"model": ErrorResponse, "description": "Bad Request"},
-        404: {"model": ErrorResponse, "description": "Not Found"},
-        409: {"model": ErrorResponse, "description": "Conflict"},
-        500: {"model": ErrorResponse, "description": "Internal Server Error"},
-    }
 )
 
 
 # ======================================================
-# Management of Solr Collections
+# Management of Solr Collections
 # ======================================================
 @router.post(
-    "/collections/create",
+    "/collections",
     response_model=CollectionResponse,
     status_code=201,
-    summary="Crear colección Solr",
-    description="Crea una nueva colección en Apache Solr.",
+    summary="Create Solr collection",
+    description="Creates a new collection in Apache Solr.",
+    responses=error_responses(
+        ConflictException, SolrException,
+        ConflictException="Collection already exists",
+    ),
 )
 async def create_collection(
     request: Request,
-    collection: str = Query(..., description="Name of the collection to create"),
+    body: CollectionCreateRequest = Body(...),
 ) -> CollectionResponse:
     """Create a new Solr collection."""
     sc = request.app.state.solr_client
+    collection = body.collection
     try:
         _, status_code = sc.create_collection(col_name=collection)
         
@@ -80,21 +90,25 @@ async def create_collection(
             message=f"Collection '{collection}' created successfully",
             collection=collection
         )
-    except ConflictException:
+    except APIException:
         raise
     except Exception as e:
         raise SolrException(str(e))
 
 
-@router.post(
-    "/collections/delete",
+@router.delete(
+    "/collections/{collection}",
     response_model=CollectionResponse,
     summary="Delete Solr collection",
     description="Deletes an existing collection from Apache Solr.",
+    responses=error_responses(
+        NotFoundException, SolrException,
+        NotFoundException="Collection not found",
+    ),
 )
 async def delete_collection(
     request: Request,
-    collection: str = Query(..., description="Name of the collection to delete"),
+    collection: str = Path(..., description="Name of the collection to delete"),
 ) -> CollectionResponse:
     """Delete an existing Solr collection."""
     sc = request.app.state.solr_client
@@ -105,15 +119,18 @@ async def delete_collection(
             message=f"Collection '{collection}' deleted successfully",
             collection=collection
         )
+    except APIException:
+        raise
     except Exception as e:
         raise SolrException(str(e))
 
 
 @router.get(
-    "/collections/list",
+    "/collections",
     response_model=CollectionListResponse,
     summary="List Solr collections",
     description="Returns the list of all available collections in Solr.",
+    responses=error_responses(SolrException),
 )
 async def list_collections(
     request: Request
@@ -126,63 +143,63 @@ async def list_collections(
             success=True,
             collections=collections
         )
+    except APIException:
+        raise
     except Exception as e:
         raise SolrException(str(e))
 
 
 @router.get(
-    "/collections/query",
+    "/collections/{collection}/query",
+    response_model=SolrQueryResponse,
     summary="Execute Solr query",
     description="Executes a direct query against a Solr collection using standard syntax.",
+    responses=error_responses(
+        ValidationException, NotFoundException, SolrException,
+        ValidationException="Invalid query syntax",
+        NotFoundException="Collection not found",
+    ),
 )
 async def execute_raw_query(
     request: Request,
-    collection: str = Query(..., description="Collection to query"),
-    q: str = Query(..., description="Query string (Solr syntax)"),
-    q_op: Optional[QueryOperator] = Query(
-        None, 
-        alias="q.op",
-        description="Default operator (AND/OR)"
-    ),
-    fq: Optional[str] = Query(None, description="Query filter"),
-    sort: Optional[str] = Query(None, description="Sorting (e.g., 'field asc')"),
-    start: Optional[int] = Query(0, ge=0, description="Pagination offset"),
-    rows: Optional[int] = Query(10, ge=1, le=1000, description="Number of rows"),
-    fl: Optional[str] = Query(None, description="Fields to return (comma-separated)"),
-    df: Optional[str] = Query(None, description="Default field"),
-) -> Dict[str, Any]:
+    collection: str = Path(..., description="Collection to query"),
+    params: SolrQueryParams = Depends(),
+) -> SolrQueryResponse:
     """Execute Solr query with full parameters."""
     sc = request.app.state.solr_client
     query_values = {
-        "q_op": q_op.value if q_op else None,
-        "fq": fq,
-        "sort": sort,
-        "start": start,
-        "rows": rows,
-        "fl": fl,
-        "df": df
+        "q_op": params.q_op.value if params.q_op else None,
+        "fq": params.fq,
+        "sort": params.sort,
+        "start": params.start,
+        "rows": params.rows,
+        "fl": params.fl,
+        "df": params.df,
     }
     query_values = {k: v for k, v in query_values.items() if v is not None}
     
     try:
-        code, results = sc.execute_query(q=q, col_name=collection, **query_values)
-        return {
-            "success": True,
-            "data": results.docs,
-            "num_found": getattr(results, 'num_found', len(results.docs))
-        }
+        code, results = sc.execute_query(q=params.q, col_name=collection, **query_values)
+        return SolrQueryResponse(
+            success=True,
+            data=results.docs,
+            num_found=getattr(results, 'num_found', len(results.docs))
+        )
+    except APIException:
+        raise
     except Exception as e:
         raise SolrException(str(e))
 
 
 # ======================================================
-# Visualization Configuration Management
+# Corpora Management
 # ======================================================
 @router.get(
-    "/corpora/list",
+    "/corpora",
     response_model=CorpusListResponse,
     summary="List all corpora",
     description="Returns the list of all corpora indexed in the system.",
+    responses=error_responses(SolrException),
 )
 async def list_all_corpora(
     request: Request
@@ -197,7 +214,7 @@ async def list_all_corpora(
             success=True,
             corpora=corpus_lst
         )
-    except SolrException:
+    except APIException:
         raise
     except Exception as e:
         raise SolrException(str(e))
@@ -208,10 +225,14 @@ async def list_all_corpora(
     response_model=CorpusModelsResponse,
     summary="List topic models of a corpus",
     description="Lists all topic models associated with a specific corpus.",
+    responses=error_responses(
+        NotFoundException, SolrException,
+        NotFoundException="Corpus not found",
+    ),
 )
 async def list_corpus_models(
     request: Request,
-    corpus_col: str,
+    corpus_col: str = Path(..., description="Name of the corpus collection"),
 ) -> CorpusModelsResponse:
     """List models associated with a corpus."""
     sc = request.app.state.solr_client
@@ -224,17 +245,21 @@ async def list_corpus_models(
             success=True,
             models=models_lst
         )
-    except SolrException:
+    except APIException:
         raise
     except Exception as e:
         raise SolrException(str(e))
 
 
+# ======================================================
+# Models Management
+# ======================================================
 @router.get(
-    "/models/list",
+    "/models",
     response_model=ModelsListResponse,
-    summary="Listar todos los modelos",
-    description="Lista todos los modelos de tópicos disponibles en el sistema.",
+    summary="List all models",
+    description="Lists all topic models available in the system.",
+    responses=error_responses(SolrException),
 )
 async def list_all_models(
     request: Request
@@ -246,143 +271,11 @@ async def list_all_models(
         if code != 200:
             raise SolrException(f"Error listing models (code: {code})")
         
-        
         return ModelsListResponse(
             success=True,
             models=models_lst
         )
-    except SolrException:
-        raise
-    except Exception as e:
-        raise SolrException(str(e))
-
-
-@router.get(
-    "/config/metadata-displayed/{corpus_col}",
-    response_model=MetadataFieldsResponse,
-    summary="Get visible metadata fields",
-    description="Gets the list of metadata fields configured to be displayed in the interface. This configuration allows evolving the visualization independently of the code.",
-)
-async def get_metadata_displayed(
-    request: Request,
-    corpus_col: str,
-) -> MetadataFieldsResponse:
-    """Get MetadataDisplayed fields from a corpus."""
-    sc = request.app.state.solr_client
-    try:
-        fields_lst, code = sc.get_corpus_MetadataDisplayed(corpus_col=corpus_col)
-        if code != 200:
-            raise SolrException(f"Error getting metadata fields (code: {code})")
-        return MetadataFieldsResponse(
-            success=True,
-            fields=fields_lst
-        )
-    except SolrException:
-        raise
-    except Exception as e:
-        raise SolrException(str(e))
-
-
-@router.get(
-    "/config/searchable-fields/{corpus_col}",
-    response_model=MetadataFieldsResponse,
-    summary="Get searchable fields",
-    description="Gets the list of fields enabled for search in a corpus.",
-)
-async def get_searchable_fields(
-    request: Request,
-    corpus_col: str,
-) -> MetadataFieldsResponse:
-    """Get SearchableField fields from a corpus."""
-    sc = request.app.state.solr_client
-    try:
-        fields_lst, code = sc.get_corpus_SearchableField(corpus_col=corpus_col)
-        if code != 200:
-            raise SolrException(f"Error getting fields (code: {code})")
-        return MetadataFieldsResponse(
-            success=True,
-            fields=fields_lst
-        )
-    except SolrException:
-        raise
-    except Exception as e:
-        raise SolrException(str(e))
-
-
-@router.post(
-    "/config/searchable-fields/{corpus_col}/add",
-    response_model=BaseResponse,
-    summary="Add searchable fields",
-    description="Adds new fields to the list of searchable fields of a corpus.",
-)
-async def add_searchable_fields(
-    request: Request,
-    corpus_col: str,
-    searchable_fields: str = Query(..., description="Fields to add (comma-separated)"),
-) -> BaseResponse:
-    """Add SearchableField fields to a corpus."""
-    sc = request.app.state.solr_client
-    try:
-        sc.modify_corpus_SearchableFields(
-            SearchableFields=searchable_fields,
-            corpus_col=corpus_col,
-            action="add"
-        )
-        return BaseResponse(
-            success=True,
-            message=f"Fields {searchable_fields} added to '{corpus_col}'"
-        )
-    except Exception as e:
-        raise SolrException(str(e))
-
-
-@router.post(
-    "/config/searchable-fields/{corpus_col}/delete",
-    response_model=BaseResponse,
-    summary="Eliminar campos de búsqueda",
-    description="Removes fields from the list of searchable fields of a corpus.",
-)
-async def delete_searchable_fields(
-    request: Request,
-    corpus_col: str,
-    searchable_fields: str = Query(..., description="Fields to remove (comma-separated)"),
-) -> BaseResponse:
-    """Remove SearchableField fields from a corpus."""
-    sc = request.app.state.solr_client
-    try:
-        sc.modify_corpus_SearchableFields(
-            SearchableFields=searchable_fields,
-            corpus_col=corpus_col,
-            action="remove"
-        )
-        return BaseResponse(
-            success=True,
-            message=f"Fields removed from '{corpus_col}'"
-        )
-    except Exception as e:
-        raise SolrException(str(e))
-
-
-@router.get(
-    "/config/searchable-fields/all",
-    response_model=MetadataFieldsResponse,
-    summary="Get all searchable fields",
-    description="Gets all searchable fields available in all corpora.",
-)
-async def get_all_searchable_fields(
-    request: Request
-) -> MetadataFieldsResponse:
-    """Get all SearcheableField fields from the system."""
-    sc = request.app.state.solr_client
-    try:
-        fields, code = sc.get_all_searchable_fields()
-        if code != 200:
-            raise SolrException(f"Error getting fields (code: {code})")
-        return MetadataFieldsResponse(
-            success=True,
-            fields=fields
-        )
-    except SolrException:
+    except APIException:
         raise
     except Exception as e:
         raise SolrException(str(e))
@@ -396,17 +289,16 @@ async def get_all_searchable_fields(
     response_model=APIKeyResponse,
     status_code=201,
     summary="Generate new API key",
-    description="""
-    Generate a new API key. **Requires master key authentication.**
-    
-    The generated API key will only be shown once in the response.
-    Store it securely as it cannot be retrieved later.
-    """,
+    description="Generate a new API key. **Requires master key authentication.** The generated API key will only be shown once in the response. Store it securely as it cannot be retrieved later.",
     dependencies=[Depends(verify_master_key)],
+    responses=error_responses(
+        UnauthorizedException,
+        UnauthorizedException="Invalid or missing master key",
+    ),
 )
 async def create_api_key(
     request: Request,
-    key_request: APIKeyCreate,
+    key_request: APIKeyCreate = Body(...),
 ) -> APIKeyResponse:
     """Generate a new API key."""
     return api_key_manager.generate_key(key_request.name)
@@ -416,12 +308,12 @@ async def create_api_key(
     "/api-keys",
     response_model=APIKeyListResponse,
     summary="List all API keys",
-    description="""
-    List all API keys with their metadata. **Requires master key authentication.**
-    
-    Note: The actual key values are not returned for security reasons.
-    """,
+    description="List all API keys with their metadata. **Requires master key authentication.** Note: The actual key values are not returned for security reasons.",
     dependencies=[Depends(verify_master_key)],
+    responses=error_responses(
+        UnauthorizedException,
+        UnauthorizedException="Invalid or missing master key",
+    ),
 )
 async def list_api_keys(
     request: Request,
@@ -437,10 +329,15 @@ async def list_api_keys(
     summary="Get API key info",
     description="Get information about a specific API key. **Requires master key authentication.**",
     dependencies=[Depends(verify_master_key)],
+    responses=error_responses(
+        UnauthorizedException, NotFoundException,
+        UnauthorizedException="Invalid or missing master key",
+        NotFoundException="API key not found",
+    ),
 )
 async def get_api_key(
     request: Request,
-    key_id: str,
+    key_id: str = Path(..., description="ID of the API key"),
 ) -> APIKeyInfo:
     """Get info about a specific API key."""
     key_info = api_key_manager.get_key_info(key_id)
@@ -451,37 +348,43 @@ async def get_api_key(
 
 @router.post(
     "/api-keys/{key_id}/revoke",
-    response_model=BaseResponse,
+    response_model=ResponseBase,
     summary="Revoke API key",
-    description="""
-    Revoke an API key (soft delete). **Requires master key authentication.**
-    
-    The key will be deactivated but kept in records.
-    """,
+    description="Revoke an API key (soft delete). **Requires master key authentication.** The key will be deactivated but kept in records.",
     dependencies=[Depends(verify_master_key)],
+    responses=error_responses(
+        UnauthorizedException, NotFoundException,
+        UnauthorizedException="Invalid or missing master key",
+        NotFoundException="API key not found",
+    ),
 )
 async def revoke_api_key(
     request: Request,
-    key_id: str,
-) -> BaseResponse:
+    key_id: str = Path(..., description="ID of the API key to revoke"),
+) -> ResponseBase:
     """Revoke an API key."""
     if api_key_manager.revoke_key(key_id):
-        return BaseResponse(success=True, message=f"API key '{key_id}' revoked successfully")
+        return ResponseBase(success=True, message=f"API key '{key_id}' revoked successfully")
     raise NotFoundException(f"API key with ID '{key_id}' not found")
 
 
 @router.delete(
     "/api-keys/{key_id}",
-    response_model=BaseResponse,
+    response_model=ResponseBase,
     summary="Delete API key",
     description="Permanently delete an API key. **Requires master key authentication.**",
     dependencies=[Depends(verify_master_key)],
+    responses=error_responses(
+        UnauthorizedException, NotFoundException,
+        UnauthorizedException="Invalid or missing master key",
+        NotFoundException="API key not found",
+    ),
 )
 async def delete_api_key(
     request: Request,
-    key_id: str,
-) -> BaseResponse:
+    key_id: str = Path(..., description="ID of the API key to delete"),
+) -> ResponseBase:
     """Permanently delete an API key."""
     if api_key_manager.delete_key(key_id):
-        return BaseResponse(success=True, message=f"API key '{key_id}' deleted successfully")
+        return ResponseBase(success=True, message=f"API key '{key_id}' deleted successfully")
     raise NotFoundException(f"API key with ID '{key_id}' not found")

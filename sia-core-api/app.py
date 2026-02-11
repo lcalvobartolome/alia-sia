@@ -19,9 +19,7 @@ from typing import AsyncGenerator
 from fastapi import Depends, FastAPI, HTTPException, Request  # type: ignore
 from fastapi.middleware.cors import CORSMiddleware  # type: ignore
 from fastapi.openapi.utils import get_openapi  # type: ignore
-from src.api.exceptions import (APIException, api_exception_handler,
-                                generic_exception_handler,
-                                http_exception_handler)
+from src.api.exceptions import register_exception_handlers
 from src.api.routers.admin import router as admin_router
 from src.api.routers.processing import router as processing_router
 from src.api.routers.services import router as exploitation_router
@@ -123,9 +121,7 @@ app.add_middleware(
 # ======================================================
 # Exception Handlers
 # ======================================================
-app.add_exception_handler(APIException, api_exception_handler)
-app.add_exception_handler(HTTPException, http_exception_handler)
-app.add_exception_handler(Exception, generic_exception_handler)
+register_exception_handlers(app)
 
 
 # ======================================================

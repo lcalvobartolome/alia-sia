@@ -8,48 +8,12 @@ RESTful API for the Public Procurement and Grants Intelligence and Analysis Syst
 
 ### 1. Infrastructure Administration (`/admin`)
 
-Low-level operations for technical management and dynamic system configuration:
-
-- **Solr Collection Management**: Creation, listing, reloading and deletion of indexes
-- **Display Configuration**: Metadata and search field management
+This block includes low-level operations for technical management and dynamic system configuration. It allows the creation, listing, reloading and deletion of Solr indexes, as well as the management of metadata and search field configurations used across the system.
 
 ### 2. Data Enrichment and Ingestion (`/processing`)
 
-Services that orchestrate the information processing pipeline:
+This block contains services that orchestrate the information processing pipeline. It enables corpus and model indexing through ingestion triggers and provides AI-powered inference services such as thematic analysis, embeddings generation and semantic similarity processing.
 
-- **Ingestion Trigger**: Corpus and model indexing
-- **AI Inference Services**: Thematic analysis, embeddings, semantic similarity
+### 3. Exploitation Services (`/exploitation`)
 
-### 3. Exploitation Services (`/search`)
-
-Block oriented to public consumption by the AI Portal:
-
-- **Multimodal Search**: ...
-- **Indicators and Statistics**: ...
-- **Recommendations**: ...
-
----
-
-## Error Handling
-
-All error responses follow a standardized format:
-
-```json
-{
-    "success": false,
-    "error": "Error description",
-    "error_code": "ERROR_CODE",
-    "details": {}
-}
-```
-
-## Error Codes
-
-| Code | Description |
-|--------|-------------|
-| `BAD_REQUEST` | Invalid request parameters |
-| `VALIDATION_ERROR` | Validation error |
-| `NOT_FOUND` | Resource not found |
-| `CONFLICT` | Resource already exists |
-| `INTERNAL_ERROR` | Internal server error |
-| `SOLR_ERROR` | Solr-specific error |
+This block provides the services consumed by PortalIA. It supports different types of search, including exact metadata queries, thematic search and semantic search, and also offers indicator calculation and recommendation services to enhance data exploration and decision-making.
