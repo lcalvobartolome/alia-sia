@@ -5,9 +5,11 @@ This module defines a class with the NP-Solr-API specific queries used to intera
 Author: Lorena Calvo-Bartolomé
 Date: 19/04/2023
 """
+from __future__ import annotations
 from datetime import datetime, timezone
-from typing import List, Tuple
-
+from typing import List, Tuple, Optional
+import json
+ 
 
 def _year_bounds_utc(year: int) -> tuple[str, str]:
     """Return ISO8601 UTC bounds [start, end) for a calendar year."""
@@ -16,6 +18,137 @@ def _year_bounds_utc(year: int) -> tuple[str, str]:
     end = datetime(
         year + 1, 1, 1, tzinfo=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     return start, end
+
+_DATE_FMT = "%Y-%m-%dT%H:%M:%SZ"
+_MONTH_ES = {
+    1: "Ene", 2: "Feb", 3: "Mar", 4: "Abr",
+    5: "May", 6: "Jun", 7: "Jul", 8: "Ago",
+    9: "Sep", 10: "Oct", 11: "Nov", 12: "Dic",
+}
+
+def _bimester_ranges(date_start: str, date_end: str) -> List[dict]:
+    """
+    Partition [date_start, date_end) into natural bimester buckets
+    (Jan–Feb, Mar–Apr, …). Only bimesters that overlap with the
+    requested interval are returned.
+
+    Returns a list of dicts:
+        {"label": "Ene–Feb 2025", "start": "...", "end": "..."}
+    where start/end are the effective (clamped) bounds.
+    """
+    t_start = datetime.strptime(date_start, _DATE_FMT).replace(tzinfo=timezone.utc)
+    t_end   = datetime.strptime(date_end,   _DATE_FMT).replace(tzinfo=timezone.utc)
+
+    year  = t_start.year
+    month = 2 * ((t_start.month - 1) // 2) + 1  # round down to nearest odd month
+
+    ranges: List[dict] = []
+    while True:
+        bim_start = datetime(year, month, 1, tzinfo=timezone.utc)
+        nxt_month = month + 2
+        nxt_year  = year
+        if nxt_month > 12:
+            nxt_month -= 12
+            nxt_year  += 1
+        bim_end = datetime(nxt_year, nxt_month, 1, tzinfo=timezone.utc)
+
+        if bim_start >= t_end:
+            break
+
+        eff_start = max(bim_start, t_start)
+        eff_end   = min(bim_end,   t_end)
+
+        ranges.append({
+            "label": f"{_MONTH_ES[month]}–{_MONTH_ES[month + 1]} {year}",
+            "start": eff_start.strftime(_DATE_FMT),
+            "end":   eff_end.strftime(_DATE_FMT),
+        })
+
+        month += 2
+        if month > 12:
+            month -= 12
+            year  += 1
+
+    return ranges
+
+
+def _build_common_fq(
+    date_field:       str,
+    date_start:       str,
+    date_end:         str,
+    tender_type:      Optional[str],
+    cpv_prefixes:     Optional[List[str]],
+    cpv_field:        str,
+    budget_min:       Optional[float],
+    budget_max:       Optional[float],
+    budget_field:     str,
+    subentidad:       Optional[str],
+    cod_subentidad:   Optional[str],
+    organo_id:        Optional[str],
+    topic_model:      Optional[str],
+    topic_id:         Optional[str],
+    topic_min_weight: Optional[float],
+    extra_fq:         Optional[List[str]],
+) -> List[str]:
+    """
+    Build the list of Solr filter queries (fq) shared by all indicators.
+    The global date-range clause is included here; per-bimester queries will
+    replace it with a narrower one.
+    """
+    fq: List[str] = []
+
+    # 4.1 – Data source
+    if tender_type is not None:
+        fq.append(f"tender_type:{tender_type}")
+
+    # 4.2 – Temporal range
+    fq.append(f"{date_field}:[{date_start} TO {date_end}}}]")
+
+    # 4.3 – Budget range
+    if budget_min is not None or budget_max is not None:
+        lo = str(budget_min) if budget_min is not None else "*"
+        hi = str(budget_max) if budget_max is not None else "*"
+        fq.append(f"{budget_field}:[{lo} TO {hi}]")
+
+    # 4.4 – CPV classification (prefix match)
+    if cpv_prefixes:
+        terms = " OR ".join(f"{p}*" for p in cpv_prefixes)
+        fq.append(f"{cpv_field}:({terms})")
+
+    # 4.5 – Geography
+    if subentidad:
+        fq.append(f'subentidad_nacional:"{subentidad.replace(chr(34), chr(92) + chr(34))}"')
+    if cod_subentidad:
+        fq.append(f"codigo_subentidad_territorial:{cod_subentidad}")
+
+    # 4.6 – Contracting authority
+    if organo_id:
+        fq.append(f"organo_id:{organo_id}")
+
+    # 4.8 – Topic model filter
+    if topic_model and topic_id is not None and topic_min_weight is not None:
+        fq.append(
+            f"{{!payload_check f=doctpc_{topic_model} v={topic_id} "
+            f"op=gte payloadVal={topic_min_weight}}}"
+        )
+
+    # Caller-supplied extra filters
+    if extra_fq:
+        fq.extend(extra_fq)
+
+    return fq
+
+
+def _bimester_fq(base_fq: List[str], date_field: str, r: dict) -> List[str]:
+    """
+    Replace the global date-range clause in base_fq with the
+    bimester-specific one.
+    """
+    prefix = f"{date_field}:["
+    return (
+        [clause for clause in base_fq if not clause.startswith(prefix)]
+        + [f"{date_field}:[{r['start']} TO {r['end']}}}]"]
+    )
 
 
 class Queries(object):
@@ -661,7 +794,7 @@ class Queries(object):
         display_fields: str = 'id,title,generated_objective,cpv,cpv_predicted,criterios_adjudicacion,criterios_solvencia,condiciones_especiales'
     ) -> dict:
         """
-        Build an fq that selects the given calendar year (UTC) on `date_field`.
+        Build an fq that selects the given calendar year (UTC) on "date_field".
         """
         s, e = _year_bounds_utc(int(year))
         custom_q30 = {
@@ -679,7 +812,7 @@ class Queries(object):
         date_field: str = 'date'
     ) -> dict:
         """
-        Yearly range facet from Jan 1 of `start_year` up to NOW on `date_field`.
+        Yearly range facet from Jan 1 of "start_year" up to NOW on "date_field".
         Returns rows=0 and a json.facet param ready for /select.
         """
         start_iso, _ = _year_bounds_utc(int(start_year))
@@ -754,3 +887,235 @@ class Queries(object):
             custom_q32['fq'] = self.Q32['fq'].format(date_field, s, e)
 
         return custom_q32
+    
+    """
+    Indicators
+    ----------
+    Q40 – Total procurement  : count of tenders + sum of budget, per bimester
+    Q41 – Single bidder      : % of lots with exactly 1 offer, per bimester
+    Q42 – Decision speed     : avg days between deadline and award, per bimester
+    
+    Filter set (section 4 of the functional spec)
+    ---------------------------------------------
+    tender_type               : "insiders" | "outsiders" | "minors" | None
+    date_start / date_end     : temporal range on "date_field"
+    date_field                : "updated" or "plazo_presentacion"
+    budget_min / budget_max   : range on "presupuesto_sin_iva"
+    cpv_prefixes              : prefix match on "cpv_list"
+    subentidad                : region name  ("subentidad_nacional")
+    cod_subentidad            : territorial code ("codigo_subentidad_territorial")
+    organo_id                 : contracting authority ("organo_id")
+    topic_model --> to be specified @TODO
+    """
+
+
+    # =========================================================================
+    # Q40 – Total procurement
+    # =========================================================================
+    def customize_Q40(
+        self,
+        date_field:       str                 = "updated",
+        date_start:       str                 = "2025-01-01T00:00:00Z",
+        date_end:         str                 = "2026-01-01T00:00:00Z",
+        tender_type:      Optional[str]       = None,
+        cpv_prefixes:     Optional[List[str]] = None,
+        cpv_field:        str                 = "cpv_list",
+        budget_min:       Optional[float]     = None,
+        budget_max:       Optional[float]     = None,
+        budget_field:     str                 = "presupuesto_sin_iva",
+        value_field:      str                 = "valor_estimado",
+        id_field:         str                 = "id",
+        subentidad:       Optional[str]       = None,
+        cod_subentidad:   Optional[str]       = None,
+        organo_id:        Optional[str]       = None,
+        topic_model:      Optional[str]       = None,
+        topic_id:         Optional[str]       = None,
+        topic_min_weight: Optional[float]     = None,
+        extra_fq:         Optional[List[str]] = None,
+    ) -> dict:
+        """
+        Customize Q40 – Total procurement.
+
+        Uses Solr JSON Facets (one query-type sub-facet per bimester) to
+        aggregate server-side. No documents are transferred (rows=0).
+
+        Solr json.facet structure
+        -------------------------
+        {
+        "Ene_Feb_2025": {
+            "type": "query",
+            "q": "<date_field>:[start TO end}]",
+            "facet": {
+            "n_tenders":    "unique(<id_field>)",
+            "total_budget": "sum(<value_field>)"
+            }
+        },
+        ...one entry per bimester...
+        }
+
+        Returns
+        -------
+        dict with keys:
+            q, fq, rows, json.facet  – forwarded to Solr
+            _meta                    – consumed by do_Q40, not sent to Solr
+        """
+        ranges  = _bimester_ranges(date_start, date_end)
+        base_fq = _build_common_fq(
+            date_field=date_field, date_start=date_start, date_end=date_end,
+            tender_type=tender_type,
+            cpv_prefixes=cpv_prefixes, cpv_field=cpv_field,
+            budget_min=budget_min, budget_max=budget_max, budget_field=budget_field,
+            subentidad=subentidad, cod_subentidad=cod_subentidad,
+            organo_id=organo_id, topic_model=topic_model,
+            topic_id=topic_id, topic_min_weight=topic_min_weight,
+            extra_fq=extra_fq,
+        )
+
+        per_bim: dict = {}
+        for r in ranges:
+            key = r["label"].replace(" ", "_").replace("–", "_")
+            per_bim[key] = {
+                "type":  "query",
+                "q":     f"{date_field}:[{r['start']} TO {r['end']}}}]",
+                "facet": {
+                    "n_tenders":    f"unique({id_field})",
+                    "total_budget": f"sum({value_field})",
+                },
+            }
+
+        return {
+            "q":          "*:*",
+            "fq":         base_fq,
+            "rows":       "0",
+            "json.facet": json.dumps(per_bim),
+            "_meta":      {"ranges": ranges},
+        }
+
+
+    # =========================================================================
+    # Q41 – Single bidder
+    # =========================================================================
+    def customize_Q41(
+        self,
+        date_field:       str                 = "updated",
+        date_start:       str                 = "2025-01-01T00:00:00Z",
+        date_end:         str                 = "2026-01-01T00:00:00Z",
+        tender_type:      Optional[str]       = None,
+        cpv_prefixes:     Optional[List[str]] = None,
+        cpv_field:        str                 = "cpv_list",
+        budget_min:       Optional[float]     = None,
+        budget_max:       Optional[float]     = None,
+        budget_field:     str                 = "presupuesto_sin_iva",
+        offers_field:     str                 = "ofertas_recibidas",
+        id_field:         str                 = "id",
+        subentidad:       Optional[str]       = None,
+        cod_subentidad:   Optional[str]       = None,
+        organo_id:        Optional[str]       = None,
+        topic_model:      Optional[str]       = None,
+        topic_id:         Optional[str]       = None,
+        topic_min_weight: Optional[float]     = None,
+        extra_fq:         Optional[List[str]] = None,
+    ) -> List[dict]:
+        """
+        Customize Q41 – Single bidder.
+
+        Returns one Solr query dict per bimester, fetching only id +
+        ofertas_recibidas. The single-bidder ratio is computed in Python
+        (do_Q41) because the field is a nested structure that Solr cannot
+        aggregate natively.
+
+        Returns
+        -------
+        List of dicts, each with keys:
+            label           – bimester label (consumed by do_Q41)
+            q, fq, fl, rows – forwarded to Solr
+            _meta           – consumed by do_Q41, not sent to Solr
+        """
+        ranges  = _bimester_ranges(date_start, date_end)
+        base_fq = _build_common_fq(
+            date_field=date_field, date_start=date_start, date_end=date_end,
+            tender_type=tender_type,
+            cpv_prefixes=cpv_prefixes, cpv_field=cpv_field,
+            budget_min=budget_min, budget_max=budget_max, budget_field=budget_field,
+            subentidad=subentidad, cod_subentidad=cod_subentidad,
+            organo_id=organo_id, topic_model=topic_model,
+            topic_id=topic_id, topic_min_weight=topic_min_weight,
+            extra_fq=extra_fq,
+        )
+
+        return [
+            {
+                "label":  r["label"],
+                "q":      "*:*",
+                "fq":     _bimester_fq(base_fq, date_field, r),
+                "fl":     f"{id_field},{offers_field}",
+                "rows":   "1000000",
+                "_meta":  {"range": r},
+            }
+            for r in ranges
+        ]
+
+
+    # =========================================================================
+    # Q42 – Decision speed
+    # =========================================================================
+    def customize_Q42(
+        self,
+        date_field:       str                 = "updated",
+        date_start:       str                 = "2025-01-01T00:00:00Z",
+        date_end:         str                 = "2026-01-01T00:00:00Z",
+        tender_type:      Optional[str]       = None,
+        cpv_prefixes:     Optional[List[str]] = None,
+        cpv_field:        str                 = "cpv_list",
+        budget_min:       Optional[float]     = None,
+        budget_max:       Optional[float]     = None,
+        budget_field:     str                 = "presupuesto_sin_iva",
+        deadline_field:   str                 = "fecha_fin_presentacion",
+        award_field:      str                 = "fecha_adjudicacion",
+        subentidad:       Optional[str]       = None,
+        cod_subentidad:   Optional[str]       = None,
+        organo_id:        Optional[str]       = None,
+        topic_model:      Optional[str]       = None,
+        topic_id:         Optional[str]       = None,
+        topic_min_weight: Optional[float]     = None,
+        extra_fq:         Optional[List[str]] = None,
+    ) -> List[dict]:
+        """
+        Customize Q42 – Decision speed.
+
+        Returns one Solr query dict per bimester, fetching only the two date
+        fields. The average delta in days is computed in Python by do_Q42.
+
+        Returns
+        -------
+        List of dicts, each with keys:
+            label           – bimester label (consumed by do_Q42)
+            q, fq, fl, rows – forwarded to Solr
+            _meta           – consumed by do_Q42, not sent to Solr
+        """
+        ranges  = _bimester_ranges(date_start, date_end)
+        base_fq = _build_common_fq(
+            date_field=date_field, date_start=date_start, date_end=date_end,
+            tender_type=tender_type,
+            cpv_prefixes=cpv_prefixes, cpv_field=cpv_field,
+            budget_min=budget_min, budget_max=budget_max, budget_field=budget_field,
+            subentidad=subentidad, cod_subentidad=cod_subentidad,
+            organo_id=organo_id, topic_model=topic_model,
+            topic_id=topic_id, topic_min_weight=topic_min_weight,
+            extra_fq=extra_fq,
+        )
+
+        return [
+            {
+                "label": r["label"],
+                "q":     "*:*",
+                "fq":    (
+                    _bimester_fq(base_fq, date_field, r)
+                    + [f"{deadline_field}:[* TO *]", f"{award_field}:[* TO *]"]
+                ),
+                "fl":    f"{deadline_field},{award_field}",
+                "rows":  "1000000",
+                "_meta": {"range": r},
+            }
+            for r in ranges
+        ]

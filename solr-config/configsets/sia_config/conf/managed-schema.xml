@@ -128,6 +128,8 @@
   <field name="objective" type="text_general" indexed="true" stored="true" multiValued="false" />
 
   <!-- Metadata PLACE  -->
+  <field name="tender_type" type="string" indexed="true" stored="true" required="false" multiValued="false" />
+  <field name="cpv_list" type="string" indexed="true" stored="true" required="false" multiValued="true" />
   <field name="updated" type="pdate" indexed="true" stored="true" multiValued="false" />
   <field name="estado" type="string" indexed="true" stored="true" required="false" multiValued="false" />
   <field name="expediente" type="string" indexed="true" stored="true" required="false" multiValued="false" />
@@ -141,14 +143,16 @@
   <field name="tramitacion" type="string" indexed="true" stored="true" required="false" multiValued="false" />
   <field name="organo_nombre" type="string" indexed="true" stored="true" required="false" multiValued="false" />
   <field name="organo_id" type="string" indexed="true" stored="true" required="false" multiValued="false" />
-  <field name="resultado" type="string" indexed="true" stored="true" required="false" multiValued="false" />
-  <field name="fecha_acuerdo" type="pdate" indexed="true" stored="true" multiValued="false" />
-  <field name="ofertas_recibidas" type="string" indexed="true" stored="true" required="false" multiValued="false" />
-  <field name="adjudicatario_nombre" type="string" indexed="true" stored="true" required="false" multiValued="false" />
-  <field name="identificador" type="string" indexed="true" stored="true" required="false" multiValued="false" />
-  <field name="adjudicatario_pyme" type="boolean" indexed="true" stored="true" required="false" multiValued="false" />
-  <field name="importe_total_sin_iva" type="pfloat" indexed="true" stored="true" multiValued="false" />
-  <field name="importe_total_con_iva" type="pfloat" indexed="true" stored="true" multiValued="false" />
+  <field name="subentidad_nacional" type="string" indexed="true" stored="true" required="false" multiValued="false" />
+  <field name="identificador" type="string" indexed="true" stored="true" required="false" multiValued="true" />
+  <field name="ofertas_recibidas" type="string" indexed="true" stored="true" required="false" multiValued="true" />
+  <field name="resultado" type="string" indexed="true" stored="true" required="false" multiValued="true" />
+  <field name="fecha_acuerdo" type="string" indexed="true" stored="true" required="false" multiValued="true" />
+  <field name="adjudicatario_nombre" type="string" indexed="true" stored="true" required="false" multiValued="true" />
+  <field name="adjudicatario_pyme" type="string" indexed="true" stored="true" required="false" multiValued="true" />
+  <field name="adjudicatario_ute" type="string" indexed="true" stored="true" required="false" multiValued="true" />
+  <field name="importe_total_sin_iva" type="string" indexed="true" stored="true" required="false" multiValued="true" />
+  <field name="importe_total_con_iva" type="string" indexed="true" stored="true" required="false" multiValued="true" />
 
 <!-- OLD  -->
  <field name="texto_administrativo" type="text_general" indexed="true" stored="true" multiValued="false" />

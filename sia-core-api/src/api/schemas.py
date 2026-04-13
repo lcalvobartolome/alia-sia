@@ -25,9 +25,21 @@ Author: Lorena Calvo-Bartolomé
 Date: 04/02/2026
 """
 
+import math
 from typing import Any, Dict, List, Literal, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from enum import Enum
+
+
+def _sanitize_nan(obj: Any) -> Any:
+    """Recursively replace float NaN/Inf with None so JSON serialization never fails."""
+    if isinstance(obj, float):
+        return None if (math.isnan(obj) or math.isinf(obj)) else obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_nan(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_nan(v) for v in obj]
+    return obj
 
 
 # ======================================================
@@ -999,3 +1011,18 @@ class TemporalSearchRequest(SearchRequestBase):
                 "pagination": {"start": 0, "rows": 20}
             }
         }
+        
+class IndicatorRequest(BaseModel):
+    date_start:       str                        = "2025-01-01T00:00:00Z"
+    date_end:         str                        = "2026-01-01T00:00:00Z"
+    date_field:       str                        = "updated"
+    tender_type:      str | None                 = None   # insiders/outsiders/minors/None
+    cpv_prefixes:     list[str] | None           = None
+    budget_min:       float | None               = None
+    budget_max:       float | None               = None
+    subentidad:       str | None                 = None
+    cod_subentidad:   str | None                 = None
+    organo_id:        str | None                 = None
+    topic_model:      str | None                 = None
+    topic_id:         str | None                 = None
+    topic_min_weight: float | None               = None

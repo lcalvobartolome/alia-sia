@@ -23,6 +23,7 @@ from fastapi import APIRouter, Body, Path, Request  # type: ignore
 
 from src.api.schemas import (
     DataResponse,
+    IndicatorRequest,
     # Search request schemas
     SemanticSearchByTextRequest,
     ThematicSearchByTextRequest,
@@ -415,31 +416,49 @@ async def get_available_years(
     except Exception as e:
         raise SolrException(str(e))
     
-# couple of dummy endpoints for indicators to be implemented in the future
-@router.get(
-    "/corpora/{corpus_collection}/indicators/indicator1",
+
+@router.post(                          
+    "/indicators/total-procurement",
     response_model=DataResponse,
-    summary="Indicator 1",
-    description="Calculate indicator 1 for the corpus.",
+    summary="Total procurement indicator",
+    description=(
+        "Count of tenders and aggregated budget per bimester. "
+        "Filter by source, CPV, date range, geography or contracting authority."
+    ),
     responses=error_responses(
-        NotFoundException, SolrException,
-        NotFoundException="Corpus not found",
+        ValidationException, SolrException,
     ),
 )
-async def calculate_indicator_1(
+async def calculate_indicator_total_procurement(
     request: Request,
-    corpus_collection: str = Path(..., description="Corpus collection name"),
+    body: IndicatorRequest = Body(...),
 ) -> DataResponse:
-    """Calculate indicator 1."""
     sc = request.app.state.solr_client
     try:
-        result = {"indicator1": 42}  # Placeholder result
+        result, status = sc.do_Q40(
+            date_start       = body.date_start,
+            date_end         = body.date_end,
+            date_field       = body.date_field,
+            tender_type      = body.tender_type,
+            cpv_prefixes     = body.cpv_prefixes,
+            budget_min       = body.budget_min,
+            budget_max       = body.budget_max,
+            subentidad       = body.subentidad,
+            cod_subentidad   = body.cod_subentidad,
+            organo_id        = body.organo_id,
+            topic_model      = body.topic_model,
+            topic_id         = body.topic_id,
+            topic_min_weight = body.topic_min_weight,
+        )
+        if status != 200:
+            raise SolrException(result.get("error", "Solr query failed"))
         return DataResponse(success=True, data=result)
     except APIException:
         raise
     except Exception as e:
         raise SolrException(str(e))
-    
+
+# @TODO: to be implemented
 @router.get(
     "/corpora/{corpus_collection}/indicators/indicator2",
     response_model=DataResponse,

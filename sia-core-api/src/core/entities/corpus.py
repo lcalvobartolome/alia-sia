@@ -90,6 +90,7 @@ Entonces, para cada licitación tenemos:
 
 import ast
 import configparser
+import math
 from datetime import datetime
 import json
 from typing import List
@@ -197,6 +198,10 @@ class Corpus(object):
             self._logger.error(
                 f"Corpus configuration {"place"} not found in config file.")
 
+        self.path_source = pathlib.Path(
+            #"/export/data_ml4ds/alia/place"
+            cf.get('restapi', 'path_source')
+            )
         self.id_field = cf.get(section, "id_field")
         self.title_field = cf.get(section, "title_field")
         self.date_field = cf.get(section, "date_field") #updated o plazo_presentacion
@@ -224,8 +229,12 @@ class Corpus(object):
             return None
 
     @staticmethod
-    def _parse_list_field(val, serialize_elements=False):
-        """Parse a field that may come as a string repr of a list or already as a list."""
+    def _parse_list_field(val, serialize_elements=False, sep=None):
+        """Parse a field that may come as a string repr of a list or already as a list.
+
+        - serialize_elements=True, sep=None  → each sub-element serialized as JSON string
+        - serialize_elements=True, sep='|'   → each sub-list joined with sep (no escaping)
+        """
         if isinstance(val, (list, np.ndarray)):
             result = list(val)
         elif not isinstance(val, str) or val.strip() in ("", "[]"):
@@ -238,6 +247,8 @@ class Corpus(object):
             except (ValueError, SyntaxError):
                 return []
         if serialize_elements:
+            if sep is not None:
+                return [sep.join(str(x) for x in v) if isinstance(v, list) else str(v) for v in result]
             return [json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else str(v) for v in result]
         return [str(v) for v in result]
 
@@ -305,26 +316,24 @@ class Corpus(object):
             df = df[cols_keep]
             self._logger.info(f"Columns: {list(df.columns)}")
 
-            # Parse nested [["-1", value]] fields
+            # Campos con estructura [["-1", "tipo", "valor"], ...] → "-1|tipo|valor" por elemento
             nested_cols = [
                 'resultado', 'fecha_acuerdo', 'ofertas_recibidas', 'ofertas_pymes',
-                'adjudicatario_nombre', 'adjudicatario_pyme', 'adjudicatario_ute',
+                'adjudicatario_nombre', 'identificador', 'adjudicatario_pyme', 'adjudicatario_ute',
                 'importe_total_sin_iva', 'importe_total_con_iva',
             ]
             for col in nested_cols:
                 if col in df.columns:
-                    df[col] = df[col].apply(self._extract_nested)
+                    df[col] = df[col].apply(lambda v: self._parse_list_field(v, serialize_elements=True, sep="|"))
 
-            # identificador tiene formato [["-1", "NIF", "valor"]] → extraer índice 2
-            if 'identificador' in df.columns:
-                df['identificador'] = df['identificador'].apply(lambda x: self._extract_nested(x, idx=2))
+            # lotes: sublistas pueden ser dicts → serializar como JSON strings
+            if 'lotes' in df.columns:
+                df['lotes'] = df['lotes'].apply(lambda v: self._parse_list_field(v, serialize_elements=True))
 
             if 'cpv_list' in df.columns:
                 df['cpv_list'] = df['cpv_list'].apply(self._parse_list_field)
-
-            # lotes: lista de [id_lote, descripcion] → lista de JSON strings
-            if 'lotes' in df.columns:
-                df['lotes'] = df['lotes'].apply(lambda v: self._parse_list_field(v, serialize_elements=True))
+                # each element in cpv_list should be a string
+                df['cpv_list'] = df['cpv_list'].apply(lambda x: [str(i) for i in x] if isinstance(x, list) else x)
 
             # Parse date columns
             date_cols = [col for col in ["updated", "plazo_presentacion", "date"] if col in df.columns]
@@ -336,12 +345,19 @@ class Corpus(object):
                 lambda x: " ".join(x.astype(str)), axis=1
             )
 
-            # Replace inf/-inf with NaN, then NaN with None in float columns (vectorised)
-            float_cols = df.select_dtypes(include="float").columns
-            df[float_cols] = df[float_cols].replace([np.inf, -np.inf], np.nan)
-            df[float_cols] = df[float_cols].where(df[float_cols].notna(), other=None)
+            def _clean(v):
+                if isinstance(v, (float, np.floating)) and (math.isnan(v) or math.isinf(v)):
+                    return None
+                if isinstance(v, dict):
+                    return {kk: _clean(vv) for kk, vv in v.items()}
+                if isinstance(v, list):
+                    return [_clean(i) for i in v]
+                return v
 
-            yield from df.to_dict(orient="records")
+            yield from (
+                {k: _clean(v) for k, v in rec.items()}
+                for rec in df.to_dict(orient="records")
+            )
         
         elif self.corpus_name == "ted":
             raise NotImplementedError("TED corpus processing not implemented yet.")
@@ -371,8 +387,10 @@ class Corpus(object):
     
 # if __name__ == "__main__":
 #     # Example usage
-#     corpus = Corpus(path_to_raw=pathlib.Path("/export/data_ml4ds/alia/place/2025_26/minors_2526.parquet"), config_file="/export/usuarios_ml4ds/lbartolome/Repos/alia/alia-sia/sia-config/config.cf")
+#     corpus = Corpus(corpus_name="place", config_file="/export/usuarios_ml4ds/lbartolome/Repos/alia/alia-sia/sia-config/config.cf")
 #     # run for all documents
 #     for doc in corpus.get_docs_metadata():
-#         print(doc)
+#         # print as JSON string
+#         print(json.dumps(doc, ensure_ascii=False))
+#         import pdb; pdb.set_trace()
     

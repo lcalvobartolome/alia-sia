@@ -6,16 +6,67 @@ Date: 17/04/2023
 Modifed: 24/01/2024 (Updated for NP-Solr-Service (NextProcurement Proyect))
 """
 
+from __future__ import annotations
 import configparser
 import logging
+import math
 import pathlib
-from typing import List, Tuple, Union
+from datetime import datetime, timezone
+from typing import List, Optional, Tuple, Union
 from src.core.clients.external.np_tools_client import NPToolsClient
 from src.core.clients.base.solr_client import SolrClient
 from src.core.entities.corpus import Corpus
 from src.core.entities.model import Model
 from src.core.entities.queries import Queries
 
+_PLACE_COL = "place"
+_DATE_FMT  = "%Y-%m-%dT%H:%M:%SZ"
+
+def _safe(val):
+    """Return None instead of NaN / Inf, and round to 4 decimal places."""
+    if val is None:
+        return None
+    try:
+        if math.isnan(val) or math.isinf(val):
+            return None
+    except TypeError:
+        pass
+    return round(val, 4)
+ 
+ 
+def _date_diff_days(d1: str, d2: str) -> Optional[float]:
+    """
+    Return max(d2 - d1, 0) in days, or None if either value is missing
+    or cannot be parsed.
+    """
+    if not d1 or not d2:
+        return None
+    try:
+        t1 = datetime.strptime(d1, _DATE_FMT).replace(tzinfo=timezone.utc)
+        t2 = datetime.strptime(d2, _DATE_FMT).replace(tzinfo=timezone.utc)
+        return max((t2 - t1).total_seconds() / 86_400.0, 0.0)
+    except Exception:
+        return None
+ 
+ 
+def _parse_lot_offers(raw) -> List[Optional[int]]:
+    """
+    Parse the "ofertas_recibidas" field.
+ 
+    The field is stored as a list of [lot_id, n_offers] pairs (or a single
+    such pair). Returns a flat list of int-or-None values (one per lot).
+    """
+    if not isinstance(raw, (list, tuple)) or not raw:
+        return []
+    pairs = raw if isinstance(raw[0], (list, tuple)) else [raw]
+    result: List[Optional[int]] = []
+    for pair in pairs:
+        try:
+            result.append(int(pair[1]))
+        except (IndexError, TypeError, ValueError):
+            result.append(None)
+    return result
+ 
 
 class SIASolrClient(SolrClient):
 
@@ -33,7 +84,6 @@ class SIASolrClient(SolrClient):
         self.batch_size = int(cf.get('restapi', 'batch_size'))
         self.corpus_col = cf.get('restapi', 'corpus_col')
         self.no_meta_fields = cf.get('restapi', 'no_meta_fields').split(",")
-        self.path_source = pathlib.Path(cf.get('restapi', 'path_source'))
         self.thetas_max_sum = int(cf.get('restapi', 'thetas_max_sum'))
         self.betas_max_sum = int(cf.get('restapi', 'betas_max_sum'))
         self.searchable_fields = cf.get('restapi', 'searchable_fields')
@@ -1853,5 +1903,335 @@ class SIASolrClient(SolrClient):
 
         return results.docs, sc
 
-        
-        
+    
+    # =======================================================================
+    # do_Q40 – Total procurement
+    # =======================================================================
+    def do_Q40(
+        self,
+        date_start:       str,
+        date_end:         str,
+        date_field:       str                 = "updated",
+        tender_type:      Optional[str]       = None,
+        cpv_prefixes:     Optional[List[str]] = None,
+        cpv_field:        str                 = "cpv_list",
+        budget_min:       Optional[float]     = None,
+        budget_max:       Optional[float]     = None,
+        budget_field:     str                 = "presupuesto_sin_iva",
+        value_field:      str                 = "valor_estimado",
+        id_field:         str                 = "id",
+        subentidad:       Optional[str]       = None,
+        cod_subentidad:   Optional[str]       = None,
+        organo_id:        Optional[str]       = None,
+        topic_model:      Optional[str]       = None,
+        topic_id:         Optional[str]       = None,
+        topic_min_weight: Optional[float]     = None,
+        extra_fq:         Optional[List[str]] = None,
+    ) -> Tuple[dict, int]:
+        """
+        Executes Q40 – Total procurement.
+    
+        Issues a single Solr request against the "place" collection using
+        JSON Facets (one query-facet per bimester). No documents are
+        transferred; all aggregation is server-side (rows=0).
+    
+        Parameters
+        ----------
+        date_start       : ISO-8601 UTC lower bound, e.g. "2025-01-01T00:00:00Z"
+        date_end         : ISO-8601 UTC upper bound (exclusive)
+        date_field       : temporal filter field ("updated" or "plazo_presentacion")
+        tender_type      : "insiders" | "outsiders" | "minors" | None (all sources)
+        cpv_prefixes     : CPV prefix list, e.g. ["48", "72", "73"]
+        budget_min/max   : range filter on `presupuesto_sin_iva`
+        subentidad       : region name filter
+        cod_subentidad   : territorial code filter
+        organo_id        : contracting authority id filter
+        topic_model / topic_id / topic_min_weight : topic model filter
+        extra_fq         : additional raw Solr fq clauses
+    
+        Returns
+        -------
+        (result, status_code)
+    
+        result = {
+            "id":              "total_procurement",
+            "bimester_labels": ["Ene–Feb 2025", ...],
+            "by_count":        [142, 310, ...],     # unique tenders per bimester
+            "by_budget":       [1.2e8, 3.4e8, ...], # sum(valor_estimado)/bimester
+            "total_tenders":   1234,
+            "total_budget":    9.87e9,
+        }
+        """
+        if not self.check_is_corpus(_PLACE_COL):
+            return {"error": f'"{_PLACE_COL}" is not a valid corpus collection'}, 400
+    
+        q = self.querier.customize_Q40(
+            date_field=date_field, date_start=date_start, date_end=date_end,
+            tender_type=tender_type,
+            cpv_prefixes=cpv_prefixes, cpv_field=cpv_field,
+            budget_min=budget_min, budget_max=budget_max, budget_field=budget_field,
+            value_field=value_field, id_field=id_field,
+            subentidad=subentidad, cod_subentidad=cod_subentidad,
+            organo_id=organo_id, topic_model=topic_model,
+            topic_id=topic_id, topic_min_weight=topic_min_weight,
+            extra_fq=extra_fq,
+        )
+        ranges = q.pop("_meta")["ranges"]
+        params = {k: v for k, v in q.items() if k != "q"}
+    
+        self.logger.info(
+            f"do_Q40 | tender_type={tender_type} | fq={q['fq']}"
+        )
+    
+        sc, results = self.execute_query(q=q["q"], col_name=_PLACE_COL, **params)
+        if sc != 200:
+            self.logger.error(f"do_Q40: Solr returned {sc}")
+            return {"error": "Solr query failed"}, sc
+    
+        facets     = results.facets or {}
+        by_count:  List = []
+        by_budget: List = []
+    
+        for r in ranges:
+            key = r["label"].replace(" ", "_").replace("–", "_")
+            bim = facets.get(key, {})
+            by_count.append(_safe(bim.get("n_tenders",    0)))
+            by_budget.append(_safe(bim.get("total_budget", 0.0)))
+    
+        result = {
+            "id":              "total_procurement",
+            "bimester_labels": [r["label"] for r in ranges],
+            "by_count":        by_count,
+            "by_budget":       by_budget,
+            "total_tenders":   sum(v for v in by_count  if v is not None),
+            "total_budget":    sum(v for v in by_budget if v is not None),
+        }
+        return result, sc
+ 
+ 
+    # =======================================================================
+    # do_Q41 – Single bidder
+    # =======================================================================
+    def do_Q41(
+        self,
+        date_start:       str,
+        date_end:         str,
+        date_field:       str                 = "updated",
+        tender_type:      Optional[str]       = None,
+        cpv_prefixes:     Optional[List[str]] = None,
+        cpv_field:        str                 = "cpv_list",
+        budget_min:       Optional[float]     = None,
+        budget_max:       Optional[float]     = None,
+        budget_field:     str                 = "presupuesto_sin_iva",
+        offers_field:     str                 = "ofertas_recibidas",
+        id_field:         str                 = "id",
+        subentidad:       Optional[str]       = None,
+        cod_subentidad:   Optional[str]       = None,
+        organo_id:        Optional[str]       = None,
+        topic_model:      Optional[str]       = None,
+        topic_id:         Optional[str]       = None,
+        topic_min_weight: Optional[float]     = None,
+        extra_fq:         Optional[List[str]] = None,
+    ) -> Tuple[dict, int]:
+        """
+        Executes Q41 – Single bidder.
+    
+        Issues one Solr request per bimester against the "place" collection,
+        fetching only id + ofertas_recibidas. The single-bidder ratio is
+        computed in Python because `ofertas_recibidas` is a nested structure
+        that Solr cannot aggregate natively.
+    
+        Returns
+        -------
+        (result, status_code)
+    
+        result = {
+            "id":              "single_bidder",
+            "bimester_labels": ["Ene–Feb 2025", ...],
+            "pct_single_bid":  [73.1, 71.5, ...],  # % lots with exactly 1 offer
+            "coverage":        [82.3, 90.1, ...],  # % lots where field is present
+            "n_lots_total":    [4200, 5100, ...],   # total lots evaluated
+        }
+        """
+        if not self.check_is_corpus(_PLACE_COL):
+            return {"error": f'"{_PLACE_COL}" is not a valid corpus collection'}, 400
+    
+        queries = self.querier.customize_Q41(
+            date_field=date_field, date_start=date_start, date_end=date_end,
+            tender_type=tender_type,
+            cpv_prefixes=cpv_prefixes, cpv_field=cpv_field,
+            budget_min=budget_min, budget_max=budget_max, budget_field=budget_field,
+            offers_field=offers_field, id_field=id_field,
+            subentidad=subentidad, cod_subentidad=cod_subentidad,
+            organo_id=organo_id, topic_model=topic_model,
+            topic_id=topic_id, topic_min_weight=topic_min_weight,
+            extra_fq=extra_fq,
+        )
+    
+        labels:       List = []
+        pct_single:   List = []
+        cov_list:     List = []
+        n_lots_total: List = []
+        last_sc = 200
+    
+        for q in queries:
+            label  = q.pop("label")
+            q.pop("_meta")
+            params = {k: v for k, v in q.items() if k != "q"}
+    
+            self.logger.info(
+                f"do_Q41 | bim={label} | tender_type={tender_type}"
+            )
+    
+            sc, results = self.execute_query(
+                q=q["q"], col_name=_PLACE_COL, **params
+            )
+            if sc != 200:
+                self.logger.error(
+                    f"do_Q41: Solr returned {sc} for bimester '{label}'"
+                )
+                last_sc = sc
+                labels.append(label)
+                pct_single.append(None)
+                cov_list.append(None)
+                n_lots_total.append(None)
+                continue
+    
+            total_lots = lots_with_value = single_bid_lots = 0
+    
+            for doc in results.docs:
+                lots = _parse_lot_offers(doc.get(offers_field))
+                if not lots:
+                    total_lots += 1          # doc has no lot info – one observation
+                else:
+                    for val in lots:
+                        total_lots += 1
+                        if val is not None:
+                            lots_with_value += 1
+                            if val == 1:
+                                single_bid_lots += 1
+    
+            labels.append(label)
+            cov_list.append(
+                _safe(lots_with_value / total_lots * 100) if total_lots > 0 else None
+            )
+            pct_single.append(
+                _safe(single_bid_lots / lots_with_value * 100)
+                if lots_with_value > 0 else None
+            )
+            n_lots_total.append(total_lots)
+    
+        result = {
+            "id":              "single_bidder",
+            "bimester_labels": labels,
+            "pct_single_bid":  pct_single,
+            "coverage":        cov_list,
+            "n_lots_total":    n_lots_total,
+        }
+        return result, last_sc
+    
+    
+    # =======================================================================
+    # do_Q42 – Decision speed
+    # =======================================================================
+    def do_Q42(
+        self,
+        date_start:       str,
+        date_end:         str,
+        date_field:       str                 = "updated",
+        tender_type:      Optional[str]       = None,
+        cpv_prefixes:     Optional[List[str]] = None,
+        cpv_field:        str                 = "cpv_list",
+        budget_min:       Optional[float]     = None,
+        budget_max:       Optional[float]     = None,
+        budget_field:     str                 = "presupuesto_sin_iva",
+        deadline_field:   str                 = "fecha_fin_presentacion",
+        award_field:      str                 = "fecha_adjudicacion",
+        subentidad:       Optional[str]       = None,
+        cod_subentidad:   Optional[str]       = None,
+        organo_id:        Optional[str]       = None,
+        topic_model:      Optional[str]       = None,
+        topic_id:         Optional[str]       = None,
+        topic_min_weight: Optional[float]     = None,
+        extra_fq:         Optional[List[str]] = None,
+    ) -> Tuple[dict, int]:
+        """
+        Executes Q42 – Decision speed.
+    
+        Issues one Solr request per bimester against the "place" collection,
+        fetching only the two date fields. The average delta in days is
+        computed in Python.
+    
+        Returns
+        -------
+        (result, status_code)
+    
+        result = {
+            "id":              "decision_speed",
+            "bimester_labels": ["Ene–Feb 2025", ...],
+            "avg_days":        [32.1, 28.4, ...],
+            "n_obs":           [1200, 980, ...],  # docs with both dates present
+        }
+        """
+        if not self.check_is_corpus(_PLACE_COL):
+            return {"error": f'"{_PLACE_COL}" is not a valid corpus collection'}, 400
+    
+        queries = self.querier.customize_Q42(
+            date_field=date_field, date_start=date_start, date_end=date_end,
+            tender_type=tender_type,
+            cpv_prefixes=cpv_prefixes, cpv_field=cpv_field,
+            budget_min=budget_min, budget_max=budget_max, budget_field=budget_field,
+            deadline_field=deadline_field, award_field=award_field,
+            subentidad=subentidad, cod_subentidad=cod_subentidad,
+            organo_id=organo_id, topic_model=topic_model,
+            topic_id=topic_id, topic_min_weight=topic_min_weight,
+            extra_fq=extra_fq,
+        )
+    
+        labels:   List = []
+        avg_days: List = []
+        n_obs:    List = []
+        last_sc = 200
+    
+        for q in queries:
+            label = q.pop("label")
+            q.pop("_meta")
+            params = {k: v for k, v in q.items() if k != "q"}
+    
+            self.logger.info(
+                f"do_Q42 | bim={label} | tender_type={tender_type}"
+            )
+    
+            sc, results = self.execute_query(
+                q=q["q"], col_name=_PLACE_COL, **params
+            )
+            if sc != 200:
+                self.logger.error(
+                    f"do_Q42: Solr returned {sc} for bimester '{label}'"
+                )
+                last_sc = sc
+                labels.append(label)
+                avg_days.append(None)
+                n_obs.append(0)
+                continue
+    
+            deltas: List[float] = []
+            for doc in results.docs:
+                delta = _date_diff_days(
+                    doc.get(deadline_field), doc.get(award_field)
+                )
+                if delta is not None:
+                    deltas.append(delta)
+    
+            labels.append(label)
+            avg_days.append(_safe(sum(deltas) / len(deltas)) if deltas else None)
+            n_obs.append(len(deltas))
+    
+        result = {
+            "id":              "decision_speed",
+            "bimester_labels": labels,
+            "avg_days":        avg_days,
+            "n_obs":           n_obs,
+        }
+        return result, last_sc
+    
