@@ -158,7 +158,13 @@ class SolrResp(object):
         results = {}
 
         # Get JSON object of the result
-        resp = resp.json()
+        http_status = resp.status_code
+        try:
+            resp = resp.json()
+        except requests.exceptions.JSONDecodeError:
+            text = f"Empty or non-JSON response from Solr (HTTP {http_status})"
+            logger.error(f'-- -- {text}')
+            return SolrResp(http_status or 400, text, data)
 
         # If response header has status 0, request is acknowledged
         if 'responseHeader' in resp and resp['responseHeader']['status'] == 0:

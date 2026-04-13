@@ -48,22 +48,44 @@ def _date_diff_days(d1: str, d2: str) -> Optional[float]:
     except Exception:
         return None
  
+def _parse_date_field(raw) -> List[Optional[str]]:
+    """
+    Parse a date field stored as a list of "lot_id|date_value" strings,
+    e.g. ["-1|2024-09-14"]. Returns a flat list of date strings or None.
+    A plain ISO string (not the lot|date format) is returned as-is.
+    """
+    if not raw:
+        return []
+    if isinstance(raw, str):
+        return [raw]
+    result: List[Optional[str]] = []
+    for item in raw:
+        try:
+            parts = item.split("|", 1)
+            result.append(parts[1] if len(parts) == 2 else parts[0])
+        except (AttributeError, IndexError):
+            result.append(None)
+    return result
+ 
+ 
  
 def _parse_lot_offers(raw) -> List[Optional[int]]:
     """
-    Parse the "ofertas_recibidas" field.
+    Parse the `ofertas_recibidas` field.
  
-    The field is stored as a list of [lot_id, n_offers] pairs (or a single
-    such pair). Returns a flat list of int-or-None values (one per lot).
+    Solr stores this field as a list of strings with format "lot_id|n_offers",
+    e.g. ["-1|1", "2|3"].  Returns a flat list of int-or-None values,
+    one per lot.
     """
     if not isinstance(raw, (list, tuple)) or not raw:
         return []
-    pairs = raw if isinstance(raw[0], (list, tuple)) else [raw]
     result: List[Optional[int]] = []
-    for pair in pairs:
+    for item in raw:
         try:
-            result.append(int(pair[1]))
-        except (IndexError, TypeError, ValueError):
+            # Expected format: "lot_id|n_offers"
+            n_offers = item.split("|")[1]
+            result.append(int(n_offers))
+        except (AttributeError, IndexError, ValueError):
             result.append(None)
     return result
  
@@ -214,7 +236,7 @@ class SIASolrClient(SolrClient):
         if sc != 200:
             self.logger.error(
                 f"-- -- Error getting corpus collections in {self.corpus_col}. Aborting operation...")
-            return
+            return [], sc
 
         corpus_lst = [doc["corpus_name"] for doc in results.docs]
 
@@ -1965,7 +1987,7 @@ class SIASolrClient(SolrClient):
         if not self.check_is_corpus(_PLACE_COL):
             return {"error": f'"{_PLACE_COL}" is not a valid corpus collection'}, 400
     
-        q = self.querier.customize_Q40(
+        q  = self.querier.customize_Q40(
             date_field=date_field, date_start=date_start, date_end=date_end,
             tender_type=tender_type,
             cpv_prefixes=cpv_prefixes, cpv_field=cpv_field,
@@ -2129,11 +2151,12 @@ class SIASolrClient(SolrClient):
             "n_lots_total":    n_lots_total,
         }
         return result, last_sc
-    
-    
-    # =======================================================================
+ 
+ 
+    # ===========================================================================
     # do_Q42 – Decision speed
-    # =======================================================================
+    # ===========================================================================
+    
     def do_Q42(
         self,
         date_start:       str,
@@ -2217,11 +2240,13 @@ class SIASolrClient(SolrClient):
     
             deltas: List[float] = []
             for doc in results.docs:
-                delta = _date_diff_days(
-                    doc.get(deadline_field), doc.get(award_field)
-                )
-                if delta is not None:
-                    deltas.append(delta)
+                # Both fields may be plain ISO strings or "lot_id|date" lists
+                deadlines = _parse_date_field(doc.get(deadline_field))
+                awards    = _parse_date_field(doc.get(award_field))
+                for d1, d2 in zip(deadlines, awards):
+                    delta = _date_diff_days(d1, d2)
+                    if delta is not None:
+                        deltas.append(delta)
     
             labels.append(label)
             avg_days.append(_safe(sum(deltas) / len(deltas)) if deltas else None)
@@ -2234,4 +2259,3 @@ class SIASolrClient(SolrClient):
             "n_obs":           n_obs,
         }
         return result, last_sc
-    

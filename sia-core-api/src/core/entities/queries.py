@@ -91,64 +91,63 @@ def _build_common_fq(
     extra_fq:         Optional[List[str]],
 ) -> List[str]:
     """
-    Build the list of Solr filter queries (fq) shared by all indicators.
-    The global date-range clause is included here; per-bimester queries will
-    replace it with a narrower one.
+    Build the list of Solr filter query clauses shared by all indicators.
+    Returns a list so callers can filter individual clauses (e.g. replace
+    the date range per bimester). Convert to a single fq string with
+    ' AND '.join(result) before passing to execute_query.
     """
-    fq: List[str] = []
+    clauses: List[str] = []
 
     # 4.1 – Data source
     if tender_type is not None:
-        fq.append(f"tender_type:{tender_type}")
+        clauses.append(f"tender_type:{tender_type}")
 
-    # 4.2 – Temporal range
-    fq.append(f"{date_field}:[{date_start} TO {date_end}}}]")
+    # 4.2 – Temporal range (exclusive upper bound: [start TO end} )
+    clauses.append(f"{date_field}:[{date_start} TO {date_end}}}")
 
     # 4.3 – Budget range
     if budget_min is not None or budget_max is not None:
         lo = str(budget_min) if budget_min is not None else "*"
         hi = str(budget_max) if budget_max is not None else "*"
-        fq.append(f"{budget_field}:[{lo} TO {hi}]")
+        clauses.append(f"{budget_field}:[{lo} TO {hi}]")
 
     # 4.4 – CPV classification (prefix match)
     if cpv_prefixes:
         terms = " OR ".join(f"{p}*" for p in cpv_prefixes)
-        fq.append(f"{cpv_field}:({terms})")
+        clauses.append(f"{cpv_field}:({terms})")
 
     # 4.5 – Geography
     if subentidad:
-        fq.append(f'subentidad_nacional:"{subentidad.replace(chr(34), chr(92) + chr(34))}"')
+        clauses.append(f'subentidad_nacional:"{subentidad.replace(chr(34), chr(92) + chr(34))}"')
     if cod_subentidad:
-        fq.append(f"codigo_subentidad_territorial:{cod_subentidad}")
+        clauses.append(f"codigo_subentidad_territorial:{cod_subentidad}")
 
     # 4.6 – Contracting authority
     if organo_id:
-        fq.append(f"organo_id:{organo_id}")
+        clauses.append(f"organo_id:{organo_id}")
 
     # 4.8 – Topic model filter
     if topic_model and topic_id is not None and topic_min_weight is not None:
-        fq.append(
+        clauses.append(
             f"{{!payload_check f=doctpc_{topic_model} v={topic_id} "
             f"op=gte payloadVal={topic_min_weight}}}"
         )
 
     # Caller-supplied extra filters
     if extra_fq:
-        fq.extend(extra_fq)
+        clauses.extend(extra_fq)
 
-    return fq
+    return clauses
 
-
-def _bimester_fq(base_fq: List[str], date_field: str, r: dict) -> List[str]:
+def _bimester_fq(base_fq: List[str], date_field: str, r: dict) -> str:
     """
     Replace the global date-range clause in base_fq with the
-    bimester-specific one.
+    bimester-specific one. Receives a list, returns a single fq string.
     """
     prefix = f"{date_field}:["
-    return (
-        [clause for clause in base_fq if not clause.startswith(prefix)]
-        + [f"{date_field}:[{r['start']} TO {r['end']}}}]"]
-    )
+    clauses = [c for c in base_fq if not c.startswith(prefix)]
+    clauses.append(f"{date_field}:[{r['start']} TO {r['end']}}}")
+    return " AND ".join(clauses)
 
 
 class Queries(object):
@@ -976,7 +975,7 @@ class Queries(object):
             key = r["label"].replace(" ", "_").replace("–", "_")
             per_bim[key] = {
                 "type":  "query",
-                "q":     f"{date_field}:[{r['start']} TO {r['end']}}}]",
+                "q": f"{date_field}:[{r['start']} TO {r['end']}}}",
                 "facet": {
                     "n_tenders":    f"unique({id_field})",
                     "total_budget": f"sum({value_field})",
@@ -985,7 +984,7 @@ class Queries(object):
 
         return {
             "q":          "*:*",
-            "fq":         base_fq,
+            "fq":         " AND ".join(base_fq),   
             "rows":       "0",
             "json.facet": json.dumps(per_bim),
             "_meta":      {"ranges": ranges},
@@ -1109,10 +1108,11 @@ class Queries(object):
             {
                 "label": r["label"],
                 "q":     "*:*",
-                "fq":    (
-                    _bimester_fq(base_fq, date_field, r)
-                    + [f"{deadline_field}:[* TO *]", f"{award_field}:[* TO *]"]
-                ),
+                "fq": " AND ".join([
+                    _bimester_fq(base_fq, date_field, r),
+                    f"{deadline_field}:[* TO *]",
+                    f"{award_field}:[* TO *]",
+                ]),
                 "fl":    f"{deadline_field},{award_field}",
                 "rows":  "1000000",
                 "_meta": {"range": r},
