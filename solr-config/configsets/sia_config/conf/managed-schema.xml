@@ -159,7 +159,7 @@
 
 <!-- AUGMENTED  -->
  <field name="generative_objective" type="text_general" indexed="true" stored="true" multiValued="false" />
- <field name="lemmas" type="text_general" indexed="true" stored="true" multiValued="false" />
+ <field name="lemmas" type="text_general" indexed="true" stored="true" multiValued="true" />
  <field name="nwords_per_doc" type="pint" indexed="true" stored="true" multiValued="false" />
  <field name="semantic_score" type="pfloat" indexed="true" stored="true" multiValued="false" />
  <field name="is_relevant" type="boolean" indexed="true" stored="true" multiValued="false" />
@@ -399,7 +399,7 @@
     </analyzer>
   </fieldType>
 
-  <fieldType name="knn_vector_embeddings" class="solr.DenseVectorField" vectorDimension="384" similarityFunction="cosine"/>
+  <fieldType name="knn_vector_embeddings" class="solr.DenseVectorField" vectorDimension="768" similarityFunction="cosine"/>
 
   <fieldType name="knn_vector_tpc_embeddings" class="solr.DenseVectorField" vectorDimension="200" similarityFunction="cosine"/>
 

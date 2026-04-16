@@ -1583,10 +1583,9 @@ class SIASolrClient(SolrClient):
         search_doc:str,
         start:int,
         rows:int,
-        embedding_model:str = "bert",
+        filter_query:str = None,
         keyword:str = None,
         query_fields:str="raw_text", #"tile objective"
-        lang:str = "es",
     ) -> Union[dict,int]:
         """
         Executes query Q21.
@@ -1601,10 +1600,6 @@ class SIASolrClient(SolrClient):
             Index of the first document to be retrieved
         rows: int
             Number of documents to be retrieved
-        embedding_model: str
-            Name of the embedding model to be used
-        lang: str
-            Language of the text to be embedded
         
         Returns
         -------

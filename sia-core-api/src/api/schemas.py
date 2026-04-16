@@ -960,23 +960,6 @@ class ThematicSearchByTextRequest(SearchRequestBase):
             }
         }
 
-
-class WordSimilaritySearchRequest(SearchRequestBase):
-    """Request for word-level semantic search using Word2Vec."""
-    word: str = Field(..., description="Search keyword")
-    model_name: str = Field(..., description="Embeddings model name")
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "word": "ciberseguridad",
-                "model_name": "w2v_model_v1",
-                "filters": {"cpv": "72000000"},
-                "pagination": {"start": 0, "rows": 10}
-            }
-        }
-
-
 class SimilarByDocumentRequest(SearchRequestBase):
     """
     Request for finding documents similar to one or more existing documents.

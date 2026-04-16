@@ -27,7 +27,6 @@ from src.api.schemas import (
     # Search request schemas
     SemanticSearchByTextRequest,
     ThematicSearchByTextRequest,
-    WordSimilaritySearchRequest,
     SimilarByDocumentRequest,
     #TemporalSearchRequest,
     MetadataFilter,
@@ -192,7 +191,6 @@ async def semantic_search_by_text(
         result = sc.do_Q21(
             corpus_col=corpus_collection,
             search_doc=body.query_text,
-            embedding_model="bert",
             filter_query=_build_filter_query(body.filter_query, body.filters),
             start=body.pagination.start,
             rows=body.pagination.rows,
@@ -238,44 +236,6 @@ async def similar_docs_by_text_tm(
         raise
     except Exception as e:
         raise SolrException(str(e))
-
-
-@router.post(
-    "/corpora/{corpus_collection}/semantic/by-word",
-    response_model=DataResponse,
-    summary="Search by word similarity",
-    description=(
-        "Find documents related to a word using Word2Vec. Uses word embeddings "
-        "to find documents containing terms semantically related to the search word."
-    ),
-    responses=error_responses(
-        NotFoundException, SolrException,
-        NotFoundException="Corpus or model not found",
-    ),
-)
-async def docs_related_to_word(
-    request: Request,
-    corpus_collection: str = Path(..., description="Corpus collection name"),
-    body: WordSimilaritySearchRequest = Body(...),
-) -> DataResponse:
-    """Find documents related to a word using Word2Vec embeddings."""
-    sc = request.app.state.solr_client
-    try:
-        result = sc.do_Q20(
-            corpus_col=corpus_collection,
-            model_name=body.model_name,
-            search_word=body.word,
-            embedding_model="word2vec",
-            filter_query=_build_filter_query(body.filter_query, body.filters),
-            start=body.pagination.start,
-            rows=body.pagination.rows,
-        )
-        return DataResponse(success=True, data=result)
-    except APIException:
-        raise
-    except Exception as e:
-        raise SolrException(str(e))
-
 
 # ======================================================
 # Similarity by Document ID(s)

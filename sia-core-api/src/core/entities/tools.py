@@ -36,7 +36,6 @@ class SIATools:
             from alia_pipeline.nlp_pipeline.embeddings import EmbeddingsManager
             self._embeddings_manager = EmbeddingsManager(
                 model_name="hiiamsid/sentence_similarity_spanish_es",
-                max_seq_length=384,
                 batch_size=32,
                 logger=self._logger,
             )

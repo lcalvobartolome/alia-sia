@@ -60,62 +60,62 @@ import pathlib
 import pyarrow.parquet as pq
 import pandas as pd
 import numpy as np
-from src.core.entities.utils import parseTimeINSTANT
+#from src.core.entities.utils import parseTimeINSTANT
 
 
-# def is_valid_xml_char_ordinal(i):
-#     """
-#     Defines whether char is valid to use in xml document
-#     XML standard defines a valid char as::
-#     Char ::= #x9 | #xA | #xD | [#x20-#xD7FF] | [#xE000-#xFFFD] | [#x10000-#x10FFFF]
-#     """
-#     # conditions ordered by presumed frequency
-#     return (
-#         0x20 <= i <= 0xD7FF
-#         or i in (0x9, 0xA, 0xD)
-#         or 0xE000 <= i <= 0xFFFD
-#         or 0x10000 <= i <= 0x10FFFF
-#     )
+def is_valid_xml_char_ordinal(i):
+    """
+    Defines whether char is valid to use in xml document
+    XML standard defines a valid char as::
+    Char ::= #x9 | #xA | #xD | [#x20-#xD7FF] | [#xE000-#xFFFD] | [#x10000-#x10FFFF]
+    """
+    # conditions ordered by presumed frequency
+    return (
+        0x20 <= i <= 0xD7FF
+        or i in (0x9, 0xA, 0xD)
+        or 0xE000 <= i <= 0xFFFD
+        or 0x10000 <= i <= 0x10FFFF
+    )
 
-# import pytz
-# import math
-# def clean_xml_string(s):
-#     """
-#     Cleans string from invalid xml chars
-#     Solution was found there::
-#     http://stackoverflow.com/questions/8733233/filtering-out-certain-bytes-in-python
-#     """
-#     return "".join(c for c in s if is_valid_xml_char_ordinal(ord(c)))
+import pytz
+import math
+def clean_xml_string(s):
+    """
+    Cleans string from invalid xml chars
+    Solution was found there::
+    http://stackoverflow.com/questions/8733233/filtering-out-certain-bytes-in-python
+    """
+    return "".join(c for c in s if is_valid_xml_char_ordinal(ord(c)))
 
 
-# def parseTimeINSTANT(time):
-#     """
-#     Parses a string or datetime-like value representing an instant in time.
-#     Supports ISO 8601 with timezone (e.g. '2024-12-30T13:52:11.444+01:00'),
-#     '%Y-%m-%d %H:%M:%S' string formats, and pandas Timestamp / datetime objects.
-#     """
-#     import pandas as pd
-#     # Handle pandas NaT
-#     if time is pd.NaT or (isinstance(time, float) and math.isnan(time)):
-#         return clean_xml_string("")
-#     # Handle pandas Timestamp or Python datetime objects
-#     if isinstance(time, (pd.Timestamp, datetime)):
-#         dt = time.to_pydatetime() if isinstance(time, pd.Timestamp) else time
-#         if dt.tzinfo is None:
-#             dt = dt.replace(tzinfo=pytz.UTC)
-#         dt_utc = dt.astimezone(pytz.UTC)
-#         return clean_xml_string(dt_utc.strftime('%Y-%m-%dT%H:%M:%S.%fZ'))
-#     if isinstance(time, str) and time not in ("", "foo"):
-#         try:
-#             # ISO 8601 with optional timezone — works for both naive and aware
-#             dt = datetime.fromisoformat(time)
-#         except ValueError:
-#             dt = datetime.strptime(time, '%Y-%m-%d %H:%M:%S')
-#         if dt.tzinfo is None:
-#             dt = dt.replace(tzinfo=pytz.UTC)
-#         dt_utc = dt.astimezone(pytz.UTC)
-#         return clean_xml_string(dt_utc.strftime('%Y-%m-%dT%H:%M:%S.%fZ'))
-#     return clean_xml_string("")
+def parseTimeINSTANT(time):
+    """
+    Parses a string or datetime-like value representing an instant in time.
+    Supports ISO 8601 with timezone (e.g. '2024-12-30T13:52:11.444+01:00'),
+    '%Y-%m-%d %H:%M:%S' string formats, and pandas Timestamp / datetime objects.
+    """
+    import pandas as pd
+    # Handle pandas NaT
+    if time is pd.NaT or (isinstance(time, float) and math.isnan(time)):
+        return clean_xml_string("")
+    # Handle pandas Timestamp or Python datetime objects
+    if isinstance(time, (pd.Timestamp, datetime)):
+        dt = time.to_pydatetime() if isinstance(time, pd.Timestamp) else time
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=pytz.UTC)
+        dt_utc = dt.astimezone(pytz.UTC)
+        return clean_xml_string(dt_utc.strftime('%Y-%m-%dT%H:%M:%S.%fZ'))
+    if isinstance(time, str) and time not in ("", "foo"):
+        try:
+            # ISO 8601 with optional timezone — works for both naive and aware
+            dt = datetime.fromisoformat(time)
+        except ValueError:
+            dt = datetime.strptime(time, '%Y-%m-%d %H:%M:%S')
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=pytz.UTC)
+        dt_utc = dt.astimezone(pytz.UTC)
+        return clean_xml_string(dt_utc.strftime('%Y-%m-%dT%H:%M:%S.%fZ'))
+    return clean_xml_string("")
 
 from alia_pipeline.utils.filter_utils import get_cpv_filtered_ids
 
@@ -171,8 +171,8 @@ class Corpus(object):
                 f"Corpus configuration {"place"} not found in config file.")
 
         self.path_source = pathlib.Path(
-            #"/export/data_ml4ds/alia/place"
-            cf.get('restapi', 'path_source')
+            "/export/data_ml4ds/alia/place"
+            #cf.get('restapi', 'path_source')
         )
         self.id_field = cf.get(section, "id_field")
         self.title_field = cf.get(section, "title_field")
@@ -359,6 +359,7 @@ class Corpus(object):
                 else [float(v) for v in x.split()] if isinstance(x, str)
                 else x
             )
+        import pdb; pdb.set_trace()
 
         # Any other columns that are still np.ndarray
         for col in df_enriched.columns:
@@ -496,6 +497,8 @@ class Corpus(object):
             def _clean(v):
                 if isinstance(v, (float, np.floating)) and (math.isnan(v) or math.isinf(v)):
                     return None
+                if isinstance(v, list) and len(v) == 0:
+                    return None
                 if isinstance(v, dict):
                     return {kk: _clean(vv) for kk, vv in v.items()}
                 if isinstance(v, list):
@@ -531,10 +534,10 @@ class Corpus(object):
         return fields_dict
 
 
-# if __name__ == "__main__":
-#     # Example usage
-#     corpus = Corpus(corpus_name="place", config_file="/export/usuarios_ml4ds/lbartolome/Repos/alia/alia-sia/sia-config/config.cf")
-#     # run for all documents
-#     for doc in corpus.get_docs_metadata():
-#         print(doc)
-#         import pdb; pdb.set_trace()
+if __name__ == "__main__":
+    # Example usage
+    corpus = Corpus(corpus_name="place", config_file="/export/usuarios_ml4ds/lbartolome/Repos/alia/alia-sia/sia-config/config.cf")
+    # run for all documents
+    for doc in corpus.get_docs_metadata():
+        print(doc)
+        import pdb; pdb.set_trace()
