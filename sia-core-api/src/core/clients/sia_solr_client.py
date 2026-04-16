@@ -8,12 +8,14 @@ Modifed: 24/01/2024 (Updated for NP-Solr-Service (NextProcurement Proyect))
 
 from __future__ import annotations
 import configparser
+import hashlib
+import json
 import logging
 import math
 import pathlib
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple, Union
-from src.core.clients.external.np_tools_client import NPToolsClient
+from src.core.entities.tools import SIATools
 from src.core.clients.base.solr_client import SolrClient
 from src.core.entities.corpus import Corpus
 from src.core.entities.model import Model
@@ -132,104 +134,129 @@ class SIASolrClient(SolrClient):
         # Create Queries object for managing queries
         self.querier = Queries()
 
-        # Create NPToolsClient to send requests to the NPTools API
-        self.nptooler = NPToolsClient(logger)
+        # Create SIATools object for NLP functionalities
+        self.sia_tools = SIATools(logger)
 
         return
 
     # ======================================================
     # CORPUS-RELATED OPERATIONS
     # ======================================================
+    @staticmethod
+    def _doc_hash(doc: dict) -> str:
+        """Fingerprint SHA-1 del contenido del documento (excluye doc_hash si ya existe)."""
+        cleaned = {k: v for k, v in doc.items() if k != "doc_hash"}
+        return hashlib.sha1(
+            json.dumps(cleaned, sort_keys=True, default=str).encode()
+        ).hexdigest()
 
-    def index_corpus(
-        self,
-        corpus_name: str
-    ) -> None:
+    def _get_indexed_hashes(self, col_name: str) -> dict:
         """
-        This method takes the name of a corpus raw file as input. It creates a Solr collection with the stem name of the file, which is obtained by converting the file name to lowercase (for example, if the input is 'Cordis', the stem would be 'cordis'). However, this process occurs only if the directory structure (self.path_source / corpus_raw / parquet) exists.
-
-        After creating the Solr collection, the method reads the corpus file, extracting the raw information of each document. Subsequently, it sends a POST request to the Solr server to index the documents in batches.
-
-        Parameters
-        ----------
-        corpus_raw : str
-            The string name of the corpus raw file to be indexed.
-
+        Returns {doc_id: doc_hash} for all documents already indexed in col_name. Uses cursorMark for efficient pagination without degradation. Only retrieves id and doc_hash, without content fields.
         """
-
-        self.logger.info(f"Corpus to index: {corpus_name}")
-
-        # 1. Create collection
-        corpus, err = self.create_collection(
-            col_name=corpus_name, config=self.solr_config)
-        if err == 409:
-            self.logger.info(
-                f"-- -- Collection {corpus_name} already exists.")
-            return
-        else:
-            self.logger.info(
-                f"-- -- Collection {corpus_name} successfully created.")
-
-        # 2. Add corpus collection to self.corpus_col. If Corpora has not been created already, create it
-        corpus, err = self.create_collection(
-            col_name=self.corpus_col, config=self.solr_config)
-        self.logger.info(f"-- -- Collection {self.corpus_col} successfully created.")
-        if err == 409:
-            self.logger.info(
-                f"-- -- Collection {self.corpus_col} already exists.")
-
-            # 2.1. Do query to retrieve last id in self.corpus_col
-            # http://localhost:8983/solr/#/{self.corpus_col}/query?q=*:*&q.op=OR&indent=true&sort=id desc&fl=id&rows=1&useParams=
-            sc, results = self.execute_query(q='*:*',
-                                             col_name=self.corpus_col,
-                                             sort="id desc",
-                                             rows="1",
-                                             fl="id")
+        indexed = {}
+        cursor = "*"
+        while True:
+            sc, results = self.execute_query(
+                q="*:*",
+                col_name=col_name,
+                fl="id,doc_hash",
+                rows=str(self.batch_size),
+                sort="id asc",
+                cursorMark=cursor,
+            )
             if sc != 200:
                 self.logger.error(
-                    f"-- -- Error getting latest used ID. Aborting operation...")
-                return
-            # Increment corpus_id for next corpus to be indexed
-            corpus_id = int(results.docs[0]["id"]) + 1
+                    f"_get_indexed_hashes: Solr error {sc} for '{col_name}'"
+                )
+                break
+            for doc in results.docs:
+                indexed[str(doc["id"])] = doc.get("doc_hash", "")
+            
+            next_cursor = results.nextCursorMark  # ← directamente del atributo
+            if next_cursor is None or next_cursor == cursor:
+                break
+            cursor = next_cursor
+
+        self.logger.info(f"-- -- {len(indexed)} docs already indexed in '{col_name}'")
+        return indexed
+
+    def index_corpus(self, corpus_name: str) -> None:
+        """
+        Indexes or incrementally updates the indicated corpus:
+        - First run: creates the collection and indexes all documents.
+        - Subsequent runs: only indexes new or modified documents (detected by change in doc_hash), ignoring unchanged ones.
+        """
+        self.logger.info(f"Corpus to index / update: {corpus_name}")
+
+        # 1. Create collection for the corpus (if it already exists, it will be an incremental update)
+        _, err = self.create_collection(col_name=corpus_name, config=self.solr_config)
+        collection_is_new = (err != 409)
+        if collection_is_new:
+            self.logger.info(f"-- -- Collection '{corpus_name}' created.")
         else:
             self.logger.info(
-                f"Collection {self.corpus_col} successfully created.")
+                f"-- -- Collection '{corpus_name}' already exists — incremental update."
+            )
+
+        # 2. Register corpus in corpus_col
+        _, err = self.create_collection(col_name=self.corpus_col, config=self.solr_config)
+        if err == 409:
+            self.logger.info(f"-- -- Collection {self.corpus_col} already exists.")
+            sc, results = self.execute_query(
+                q="*:*", col_name=self.corpus_col,
+                sort="id desc", rows="1", fl="id"
+            )
+            if sc != 200:
+                self.logger.error("-- -- Error getting latest used ID. Aborting.")
+                return
+            corpus_id = int(results.docs[0]["id"]) + 1
+        else:
+            self.logger.info(f"-- -- Collection {self.corpus_col} created.")
             corpus_id = 1
 
-        # 3. Create Corpus object and extract info from the corpus to index
+        # 3. Update entry in corpus col
         corpus = Corpus(corpus_name)
         corpus_col_upt = corpus.get_corpora_update(id=corpus_id)
-        self.logger.info(f"-- -- corpus_col_upt extracted")
-        self.logger.info(f"{corpus_col_upt}")
-
-        # 4. Index corpus and its fields in CORPUS_COL
-        self.logger.info(
-            f"-- -- Indexing of {corpus_name} info in {self.corpus_col} starts.")
+        self.logger.info(f"-- -- corpus_col_upt: {corpus_col_upt}")
         self.index_documents(corpus_col_upt, self.corpus_col, self.batch_size)
-        self.logger.info(
-            f"-- -- Indexing of {corpus_name} info in {self.corpus_col} completed.")
-        
-        self.logger.info(f"this is the corpus_col_upt: {corpus_col_upt}")
 
-        # 5. Index documents in corpus collection
-        self.logger.info(
-            f"-- -- Indexing of {corpus_name} in {corpus_name} starts.")
+        # 4. Obtain hashes of already indexed documents for incremental update (only if collection is not new)
+        indexed_hashes = (
+            {} if collection_is_new
+            else self._get_indexed_hashes(corpus_name)
+        )
+
+        # 5. Iterate over documents and send only new or modified ones
+        self.logger.info(f"-- -- Incremental indexing of '{corpus_name}' starts.")
         batch = []
-        for doc in corpus.get_docs_metadata():
-            batch.append(doc)
-            
-            if len(batch) >= self.batch_size:
-                
-                self.index_documents(batch, corpus_name, self.batch_size)
-                batch = []  # Clear batch to free memory
+        total_new = total_upd = total_skip = 0
 
-        # Index remaining documents
+        for doc in corpus.get_docs_metadata():
+            doc["doc_hash"] = self._doc_hash(doc)
+            doc_id = str(doc["id"])
+
+            if doc_id not in indexed_hashes:
+                total_new += 1
+            elif indexed_hashes[doc_id] != doc["doc_hash"]:
+                total_upd += 1
+            else:
+                total_skip += 1
+                continue  # no changes, no need to send
+
+            batch.append(doc)
+            if len(batch) >= self.batch_size:
+                self.index_documents(batch, corpus_name, self.batch_size)
+                batch = []
+
         if batch:
             self.index_documents(batch, corpus_name, self.batch_size)
-        self.logger.info(f"-- -- Indexing of {corpus_name} info in {corpus_name} completed.")
 
-
-        return
+        self.logger.info(
+            f"-- -- Indexing complete for '{corpus_name}': "
+            f"{total_new} new | {total_upd} updated | {total_skip} unchanged"
+        )
+        
 
     def list_corpus_collections(self) -> Union[List, int]:
         """Returns a list of the names of the corpus collections that have been created in the Solr server.
@@ -1593,20 +1620,15 @@ class SIASolrClient(SolrClient):
             return
         
         # 3. Get embedding from search_doc
-        resp = self.nptooler.get_embedding(
-            text_to_embed=search_doc,
-            embedding_model=embedding_model,
-            lang=lang
-        )
+        embs = self.sia_tools.get_embedding(search_doc)
         
-        if resp.status_code != 200:
+        if embs is None:
             self.logger.error(
                 f"-- -- Error attaining embeddings from {search_doc} while executing query Q21. Aborting operation...")
             return
 
-        embs = resp.results
         self.logger.info(
-            f"-- -- Embbedings for doc {search_doc} attained in {resp.time} seconds.")
+            f"-- -- Embbedings for doc {search_doc} attained.")
          
         # 4. Customize start and rows
         start, rows = self.custom_start_and_rows(start, rows, corpus_col)

@@ -123,9 +123,8 @@
   <field name="corpus_name" type="text_general" indexed="true" stored="true" multiValued="false" />
   <field name="raw_text" type="text_general" indexed="true" stored="true" multiValued="false" />
   <field name="title" type="text_general" indexed="true" stored="true" multiValued="false" />
-  <field name="lemmas" type="text_general" indexed="true" stored="true" multiValued="false" />
-  <field name="expedient" type="text_general" indexed="true" stored="true" multiValued="false" />
-  <field name="objective" type="text_general" indexed="true" stored="true" multiValued="false" />
+  <field name="summary" type="text_general" indexed="true" stored="true" multiValued="false" />
+  <field name="doc_hash" type="string" indexed="false" stored="true" multiValued="false" />
 
   <!-- Metadata PLACE  -->
   <field name="tender_type" type="string" indexed="true" stored="true" required="false" multiValued="false" />
@@ -158,28 +157,14 @@
   <field name="importe_total_sin_iva" type="string" indexed="true" stored="true" required="false" multiValued="true" />
   <field name="importe_total_con_iva" type="string" indexed="true" stored="true" required="false" multiValued="true" />
 
-<!-- OLD  -->
- <field name="texto_administrativo" type="text_general" indexed="true" stored="true" multiValued="false" />
- <field name="texto_tecnico" type="text_general" indexed="true" stored="true" multiValued="false" />
- <field name="resultado_administrativo" type="string" indexed="true" stored="true" multiValued="false" />
- <field name="resultado_tecnico" type="string" indexed="true" stored="true" multiValued="false" />
- <field name="extracted_objective" type="text_general" indexed="true" stored="true" multiValued="false" />
- <field name="generated_objective" type="text_general" indexed="true" stored="true" multiValued="false" />
- <field name="cpv_predicted" type="string" indexed="true" stored="true" multiValued="false" />
- <field name="criterios_adjudicacion" type="text_general" indexed="true" stored="true" multiValued="false" />
- <field name="criterios_solvencia" type="text_general" indexed="true" stored="true" multiValued="false" />
- <field name="condiciones_especiales" type="text_general" indexed="true" stored="true" multiValued="false" />
- <field name="nuts" type="string" indexed="true" stored="true" multiValued="false" />
- <field name="org_loc" type="string" indexed="true" stored="true" multiValued="false" />
- <field name="budget" type="pfloat" indexed="true" stored="true" multiValued="false" />
- <field name="cpv" type="string" indexed="true" stored="true" multiValued="true" />
-<field name="two_cpv" type="string" indexed="true" stored="true" multiValued="true" />
- <field name="date" type="pdate" indexed="true" stored="true" multiValued="false" />
+<!-- AUGMENTED  -->
+ <field name="generative_objective" type="text_general" indexed="true" stored="true" multiValued="false" />
+ <field name="lemmas" type="text_general" indexed="true" stored="true" multiValued="false" />
  <field name="nwords_per_doc" type="pint" indexed="true" stored="true" multiValued="false" />
- <field name="SearcheableField" type="text_general" indexed="true" stored="true" multiValued="false" />
- <field name="origin" type="string" indexed="true" stored="true" required="false" multiValued="false" />
- <field name="ident_proc" type="pint" indexed="true" stored="true" multiValued="false" />
- <field name="url" type="string" multiValued="true" stored="true" indexed="true"/>
+ <field name="semantic_score" type="pfloat" indexed="true" stored="true" multiValued="false" />
+ <field name="is_relevant" type="boolean" indexed="true" stored="true" multiValued="false" />
+ <field name="keyword_counts" type="pint" indexed="true" stored="true" multiValued="false" />
+ <field name="total_keyword_count" type="pint" indexed="true" stored="true" multiValued="false" />
 
   <!-- Model fields  -->
   <field name="alphas" type="pfloat" indexed="true" stored="true" multiValued="false" />
@@ -192,13 +177,6 @@
   <field name="tpc_labels" type="text_general" indexed="true" stored="true" multiValued="false" />
   <field name="usersIsRelevant" type="string" indexed="true" stored="true" multiValued="true" />
 
-  <!-- NP fields  -->
-  <field name="summary" type="text_general" indexed="true" stored="true" multiValued="false" />
-  <field name="lot_name" type="text_general" indexed="true" stored="true" multiValued="false" />
-  <field name="text" type="text_general" indexed="true" stored="true" multiValued="false" />
-  <field name="lang" type="text_general" indexed="true" stored="true" multiValued="false" />
-  <field name="normalized_text" type="text_general" indexed="true" stored="true" multiValued="false" />
-  <field name="preprocessed_text" type="text_general" indexed="true" stored="true" multiValued="false" />
 
   <!-- docValues are enabled by default for long type so we don't need to index the version field  -->
   <field name="_version_" type="plong" indexed="false" stored="false" />

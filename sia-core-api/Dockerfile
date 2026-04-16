@@ -20,7 +20,8 @@ RUN mkdir -p /data/inference
 RUN pip install --upgrade pip setuptools wheel
 RUN pip install --no-cache-dir \
     git+https://x-access-token:${GITHUB_TOKEN}@github.com/lcalvobartolome/portalia-pipeline.git@main \
-    -r requirements.txt
+    -r requirements.txt && \
+    pip install https://github.com/explosion/spacy-models/releases/download/es_core_news_lg-3.8.0/es_core_news_lg-3.8.0-py3-none-any.whl
 
 EXPOSE 10083
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "10083", "--workers", "2"]

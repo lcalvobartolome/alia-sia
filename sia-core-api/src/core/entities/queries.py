@@ -201,7 +201,7 @@ class Queries(object):
         # ================================================================
         self.Q5 = {
             'q': "{{!vd f=doctpc_{} vector=\"{}\" distance=\"{}\"}}",
-            'fl': "id,generated_objective,link,score",
+            'fl': "id,generative_objective,link,score",
             'start': '{}',
             'rows': '{}'
         }
@@ -230,7 +230,7 @@ class Queries(object):
         # ================================================================
         self.Q7 = {
             'q': '{}:{}',
-            'fl': 'id,generated_objective',
+            'fl': 'id,generative_objective',
             'start': '{}',
             'rows': '{}'
         }
@@ -259,10 +259,10 @@ class Queries(object):
         self.Q9 = {
             'q': '*:*',
             'sort': 'payload(doctpc_{},t{}) desc, nwords_per_doc desc',
-            'fl': 'payload(doctpc_{},t{}), generated_objective, nwords_per_doc, id',
+            'fl': 'payload(doctpc_{},t{}), generative_objective, nwords_per_doc, id',
             'fq': [
                 'doctpc_{}:[* TO *]',           
-                'generated_objective:[* TO *]',      
+                'generative_objective:[* TO *]',      
                 'nwords_per_doc:[* TO *]'     
             ],
             'start': '{}',
@@ -311,7 +311,7 @@ class Queries(object):
         # ##################################################################
         self.Q20 = {
             'q': "{{!knn f=tpc_embeddings topK=100}}{}",
-            'fl': "id,generated_objective,link,place_id,score",
+            'fl': "id,generative_objective,link,place_id,score",
             'start': '{}',
             'rows': '{}'
         }
@@ -322,7 +322,7 @@ class Queries(object):
         # ################################################################
         self.Q21 = {
             'q': "{{!knn f=embeddings topK=100}}{}",
-            'fl': "id,generated_objective,link,place_id,score",
+            'fl': "id,generative_objective,link,place_id,score",
             'start': '{}',
             'rows': '{}'
         }
@@ -331,7 +331,7 @@ class Queries(object):
         self.Q21_e = {
             'q': "{{!knn f=embeddings topK=100}}{}",
             'fq': '{{!edismax qf={}}} {}',
-            'fl': 'id,generated_objective,link,place_id,score',
+            'fl': 'id,generative_objective,link,place_id,score',
             'start': '{}',
             'rows': '{}'
         }
@@ -790,7 +790,7 @@ class Queries(object):
         start: str = '0',
         rows: str = '10',
         date_field: str = 'date',
-        display_fields: str = 'id,title,generated_objective,cpv,cpv_predicted,criterios_adjudicacion,criterios_solvencia,condiciones_especiales'
+        display_fields: str = 'id,title,generative_objective,cpv,cpv_predicted,criterios_adjudicacion,criterios_solvencia,condiciones_especiales'
     ) -> dict:
         """
         Build an fq that selects the given calendar year (UTC) on "date_field".
