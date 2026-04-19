@@ -1079,7 +1079,7 @@ class SIASolrClient(SolrClient):
         #self.logger.info("-- -- These are the meta fields: " + meta_fields)
 
         # 3. Execute query
-        q6 = self.querier.customize_Q6(id=doc_id, meta_fields=self.searchable_fields)
+        q6 = self.querier.customize_Q6(id=doc_id)
         params = {k: v for k, v in q6.items() if k != 'q'}
 
         sc, results = self.execute_query(
@@ -1090,7 +1090,10 @@ class SIASolrClient(SolrClient):
                 f"-- -- Error executing query Q6. Aborting operation...")
             return
 
-        return results.docs, sc
+        _exclude = {'doc_hash', '_version_'}
+        docs = [{k: v for k, v in doc.items() if k not in _exclude}
+                for doc in results.docs]
+        return docs, sc
 
     def do_Q7(
         self,

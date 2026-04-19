@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import List, Tuple, Optional
 import json
+import re
  
 
 def _year_bounds_utc(year: int) -> tuple[str, str]:
@@ -218,8 +219,8 @@ class Queries(object):
         # 3. Execute Q6
         # ================================================================
         self.Q6 = {
-            'q': 'id:"{}"',
-            'fl': '{}'
+            'q': 'id:{}',
+            'fl': '*'
         }
 
         # ================================================================
@@ -470,27 +471,24 @@ class Queries(object):
         return custom_q5
 
     def customize_Q6(self,
-                     id: str,
-                     meta_fields: str) -> dict:
+                     id: str) -> dict:
         """Customizes query Q6 'getMetadataDocById'
-
 
         Parameters
         ----------
         id: str
             Document id.
-        meta_fields: str
-            Metadata fields of the corpus collection to be retrieved.
 
         Returns
         -------
         custom_q6: dict
-            Customized query Q6.
+            Customized query Q6 returning all Solr fields except doc_hash and _version_.
         """
 
+        escaped_id = re.sub(r'([+\-&|!(){}\[\]^"~*?:\\/])', r'\\\1', id)
         custom_q6 = {
-            'q': self.Q6['q'].format(id),
-            'fl': self.Q6['fl'].format(meta_fields)
+            'q': self.Q6['q'].format(escaped_id),
+            'fl': self.Q6['fl']
         }
 
         return custom_q6

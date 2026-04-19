@@ -26,7 +26,7 @@ from src.api.schemas import (
     IndicatorRequest,
     # Search request schemas
     SemanticSearchByTextRequest,
-    ThematicSearchByTextRequest,
+    #ThematicSearchByTextRequest,
     SimilarByDocumentRequest,
     #TemporalSearchRequest,
     MetadataFilter,
@@ -171,23 +171,23 @@ def _semantic_by_text_examples() -> dict:
     )
 
 
-def _thematic_by_text_examples() -> dict:
-    """Examples for thematic similarity by free text."""
-    return _search_examples(
-        (
-            "IT supplies with model",
-            "Thematic similarity using a topic model and CPV/date filters",
-            {
-                "query_text": "suministro de equipos informaticos para centros publicos",
-                "model_name": "topic_model_v1",
-                "filters": {
-                    "date": "2024",
-                    "cpv": "30*",
-                },
-                "pagination": {"start": 0, "rows": 10},
-            },
-        ),
-    )
+# def _thematic_by_text_examples() -> dict:
+#     """Examples for thematic similarity by free text."""
+#     return _search_examples(
+#         (
+#             "IT supplies with model",
+#             "Thematic similarity using a topic model and CPV/date filters",
+#             {
+#                 "query_text": "suministro de equipos informaticos para centros publicos",
+#                 "model_name": "topic_model_v1",
+#                 "filters": {
+#                     "date": "2024",
+#                     "cpv": "30*",
+#                 },
+#                 "pagination": {"start": 0, "rows": 10},
+#             },
+#         ),
+#     )
 
 
 def _semantic_by_document_examples() -> dict:
@@ -208,31 +208,31 @@ def _semantic_by_document_examples() -> dict:
     )
 
 
-def _thematic_by_document_examples() -> dict:
-    """Examples for thematic similarity by existing document IDs."""
-    return _search_examples(
-        (
-            "Thematic by document IDs",
-            "Thematic similarity using a topic model and two reference documents",
-            {
-                "doc_ids": ["DOC-2025-001", "DOC-2025-042"],
-                "model_name": "topic_model_v1",
-                "filters": {
-                    "date": "2025",
-                    "cpv": "72*",
-                    "extra": {"tender_type": "insiders"},
-                },
-                "pagination": {"start": 0, "rows": 10},
-            },
-        ),
-    )
+# def _thematic_by_document_examples() -> dict:
+#     """Examples for thematic similarity by existing document IDs."""
+#     return _search_examples(
+#         (
+#             "Thematic by document IDs",
+#             "Thematic similarity using a topic model and two reference documents",
+#             {
+#                 "doc_ids": ["DOC-2025-001", "DOC-2025-042"],
+#                 "model_name": "topic_model_v1",
+#                 "filters": {
+#                     "date": "2025",
+#                     "cpv": "72*",
+#                     "extra": {"tender_type": "insiders"},
+#                 },
+#                 "pagination": {"start": 0, "rows": 10},
+#             },
+#         ),
+#     )
 
 
 # ======================================================
 # Metadata queries
 # ======================================================
 @router.get(
-    "/corpora/{corpus_collection}/documents/{doc_id}",
+    "/corpora/{corpus_collection}/documents/{doc_id:path}",
     response_model=DataResponse,
     summary="Get document metadata",
     description="Retrieve all metadata associated with a specific document.",
@@ -323,41 +323,41 @@ async def semantic_search_by_text(
         raise SolrException(str(e))
 
 
-@router.post(
-    "/corpora/{corpus_collection}/thematic/by-text",
-    response_model=DataResponse,
-    summary="Thematic similarity by text",
-    description=(
-        "Find thematically similar documents to a given text. Uses topic "
-        "model inference to find documents with similar thematic content."
-    ),
-    responses=error_responses(
-        NotFoundException, SolrException,
-        NotFoundException="Corpus or model not found",
-    ),
-    openapi_extra=_thematic_by_text_examples(),
-)
-async def similar_docs_by_text_tm(
-    request: Request,
-    corpus_collection: str = Path(..., description="Corpus collection name"),
-    body: ThematicSearchByTextRequest = Body(...),
-) -> DataResponse:
-    """Find similar documents using topic model inference."""
-    sc = request.app.state.solr_client
-    try:
-        result = sc.do_Q14(
-            corpus_col=corpus_collection,
-            model_name=body.model_name,
-            text_to_infer=body.query_text,
-            filter_query=_build_filter_query(body.filters),
-            start=body.pagination.start,
-            rows=body.pagination.rows,
-        )
-        return DataResponse(success=True, data=result)
-    except APIException:
-        raise
-    except Exception as e:
-        raise SolrException(str(e))
+# @router.post(
+#     "/corpora/{corpus_collection}/thematic/by-text",
+#     response_model=DataResponse,
+#     summary="Thematic similarity by text",
+#     description=(
+#         "Find thematically similar documents to a given text. Uses topic "
+#         "model inference to find documents with similar thematic content."
+#     ),
+#     responses=error_responses(
+#         NotFoundException, SolrException,
+#         NotFoundException="Corpus or model not found",
+#     ),
+#     openapi_extra=_thematic_by_text_examples(),
+# )
+# async def similar_docs_by_text_tm(
+#     request: Request,
+#     corpus_collection: str = Path(..., description="Corpus collection name"),
+#     body: ThematicSearchByTextRequest = Body(...),
+# ) -> DataResponse:
+#     """Find similar documents using topic model inference."""
+#     sc = request.app.state.solr_client
+#     try:
+#         result = sc.do_Q14(
+#             corpus_col=corpus_collection,
+#             model_name=body.model_name,
+#             text_to_infer=body.query_text,
+#             filter_query=_build_filter_query(body.filters),
+#             start=body.pagination.start,
+#             rows=body.pagination.rows,
+#         )
+#         return DataResponse(success=True, data=result)
+#     except APIException:
+#         raise
+#     except Exception as e:
+#         raise SolrException(str(e))
 
 # ======================================================
 # Similarity by Document ID(s)
@@ -403,48 +403,48 @@ async def similar_documents_by_id(
         raise SolrException(str(e))
 
 
-@router.post(
-    "/corpora/{corpus_collection}/thematic/by-document",
-    response_model=DataResponse,
-    summary="Thematically similar documents by document ID(s)",
-    description=(
-        "Find thematically similar documents to one or more existing indexed "
-        "documents using topic model distributions."
-    ),
-    responses=error_responses(
-        ValidationException, NotFoundException, SolrException,
-        ValidationException="model_name is required for thematic similarity",
-        NotFoundException="Document, corpus or model not found",
-    ),
-    openapi_extra=_thematic_by_document_examples(),
-)
-async def similar_docs_by_doc_tm(
-    request: Request,
-    corpus_collection: str = Path(..., description="Corpus collection name"),
-    body: SimilarByDocumentRequest = Body(...),
-) -> DataResponse:
-    """Find thematically similar documents to one or more existing documents."""
-    if not body.model_name:
-        raise ValidationException("model_name is required for thematic similarity")
+# @router.post(
+#     "/corpora/{corpus_collection}/thematic/by-document",
+#     response_model=DataResponse,
+#     summary="Thematically similar documents by document ID(s)",
+#     description=(
+#         "Find thematically similar documents to one or more existing indexed "
+#         "documents using topic model distributions."
+#     ),
+#     responses=error_responses(
+#         ValidationException, NotFoundException, SolrException,
+#         ValidationException="model_name is required for thematic similarity",
+#         NotFoundException="Document, corpus or model not found",
+#     ),
+#     openapi_extra=_thematic_by_document_examples(),
+# )
+# async def similar_docs_by_doc_tm(
+#     request: Request,
+#     corpus_collection: str = Path(..., description="Corpus collection name"),
+#     body: SimilarByDocumentRequest = Body(...),
+# ) -> DataResponse:
+#     """Find thematically similar documents to one or more existing documents."""
+#     if not body.model_name:
+#         raise ValidationException("model_name is required for thematic similarity")
 
-    sc = request.app.state.solr_client
-    try:
-        all_results = []
-        for doc_id in body.doc_ids:
-            result = sc.do_Q15(
-                corpus_col=corpus_collection,
-                model_name=body.model_name,
-                doc_id=doc_id,
-                filter_query=_build_filter_query(body.filters),
-                start=body.pagination.start,
-                rows=body.pagination.rows,
-            )
-            all_results.extend(result if isinstance(result, list) else [result])
-        return DataResponse(success=True, data=all_results)
-    except APIException:
-        raise
-    except Exception as e:
-        raise SolrException(str(e))
+#     sc = request.app.state.solr_client
+#     try:
+#         all_results = []
+#         for doc_id in body.doc_ids:
+#             result = sc.do_Q15(
+#                 corpus_col=corpus_collection,
+#                 model_name=body.model_name,
+#                 doc_id=doc_id,
+#                 filter_query=_build_filter_query(body.filters),
+#                 start=body.pagination.start,
+#                 rows=body.pagination.rows,
+#             )
+#             all_results.extend(result if isinstance(result, list) else [result])
+#         return DataResponse(success=True, data=all_results)
+#     except APIException:
+#         raise
+#     except Exception as e:
+#         raise SolrException(str(e))
 
 
 # ======================================================
@@ -484,54 +484,54 @@ async def similar_docs_by_doc_tm(
 # ======================================================
 # Indicators and Statistics
 # ======================================================
-@router.get(
-    "/collections/{collection}/count",
-    response_model=DataResponse,
-    summary="Count documents",
-    description="Get the total number of documents in a collection.",
-    responses=error_responses(
-        NotFoundException, SolrException,
-        NotFoundException="Collection not found",
-    ),
-)
-async def get_document_count(
-    request: Request,
-    collection: str = Path(..., description="Collection name"),
-) -> DataResponse:
-    """Get document count."""
-    sc = request.app.state.solr_client
-    try:
-        result = sc.do_Q3(col=collection)
-        return DataResponse(success=True, data=result)
-    except APIException:
-        raise
-    except Exception as e:
-        raise SolrException(str(e))
+# @router.get(
+#     "/collections/{collection}/count",
+#     response_model=DataResponse,
+#     summary="Count documents",
+#     description="Get the total number of documents in a collection.",
+#     responses=error_responses(
+#         NotFoundException, SolrException,
+#         NotFoundException="Collection not found",
+#     ),
+# )
+# async def get_document_count(
+#     request: Request,
+#     collection: str = Path(..., description="Collection name"),
+# ) -> DataResponse:
+#     """Get document count."""
+#     sc = request.app.state.solr_client
+#     try:
+#         result = sc.do_Q3(col=collection)
+#         return DataResponse(success=True, data=result)
+#     except APIException:
+#         raise
+#     except Exception as e:
+#         raise SolrException(str(e))
 
 
-@router.get(
-    "/corpora/{corpus_collection}/years",
-    response_model=DataResponse,
-    summary="Get available years",
-    description="List all years with documents in the corpus.",
-    responses=error_responses(
-        NotFoundException, SolrException,
-        NotFoundException="Corpus not found",
-    ),
-)
-async def get_available_years(
-    request: Request,
-    corpus_collection: str = Path(..., description="Corpus collection name"),
-) -> DataResponse:
-    """Get list of available years."""
-    sc = request.app.state.solr_client
-    try:
-        result = sc.do_Q31(corpus_col=corpus_collection)
-        return DataResponse(success=True, data=result)
-    except APIException:
-        raise
-    except Exception as e:
-        raise SolrException(str(e))
+# @router.get(
+#     "/corpora/{corpus_collection}/years",
+#     response_model=DataResponse,
+#     summary="Get available years",
+#     description="List all years with documents in the corpus.",
+#     responses=error_responses(
+#         NotFoundException, SolrException,
+#         NotFoundException="Corpus not found",
+#     ),
+# )
+# async def get_available_years(
+#     request: Request,
+#     corpus_collection: str = Path(..., description="Corpus collection name"),
+# ) -> DataResponse:
+#     """Get list of available years."""
+#     sc = request.app.state.solr_client
+#     try:
+#         result = sc.do_Q31(corpus_col=corpus_collection)
+#         return DataResponse(success=True, data=result)
+#     except APIException:
+#         raise
+#     except Exception as e:
+#         raise SolrException(str(e))
     
 
 # ======================================================
