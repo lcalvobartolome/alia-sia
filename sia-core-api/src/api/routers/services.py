@@ -334,9 +334,7 @@ async def get_corpus_metadata_fields(
     response_model=DataResponse,
     summary="Semantic search by text",
     description=(
-        "Semantic search for documents similar to a given text. Uses BERT "
-        "embeddings to find documents semantically related to the query, "
-        "regardless of exact word matches. Results can be filtered by year, "
+        "Semantic search for documents similar to a given text. Results can be filtered by year, "
         "CPV code, and additional metadata."
     ),
     responses=error_responses(
@@ -400,6 +398,7 @@ async def semantic_search_by_text(
 #         return DataResponse(success=True, data=result)
 #     except APIException:
 #         raise
+
 #     except Exception as e:
 #         raise SolrException(str(e))
 
@@ -412,7 +411,9 @@ async def semantic_search_by_text(
     summary="Semantically similar documents by document ID(s) or expediente(s)",
     description=(
         "Find documents semantically similar to one or more existing indexed "
-        "documents. Accepts a list of IDs and/or expedientes as reference points."
+        "documents. Accepts a list of IDs and/or expedientes as reference points. "
+        "Results can be filtered by year, "
+        "CPV code, and additional metadata."
     ),
     responses=error_responses(
         NotFoundException, SolrException,
