@@ -19,7 +19,7 @@ Date: 27/03/2023
 Modified: 04/02/2026 (Migrated to FastAPI and reorganized)
 """
 
-from fastapi import APIRouter, Body, Path, Request  # type: ignore
+from fastapi import APIRouter, Body, Path, Query, Request  # type: ignore
 
 from src.api.schemas import (
     DataResponse,
@@ -51,7 +51,6 @@ router = APIRouter(
 # Some indicators rely on fields that are only populated for certain data
 # sources. These constants declare the allowed tender_type values.
 # None (= all sources) is never valid for restricted indicators.
-
 _INSIDERS_ONLY: frozenset = frozenset({"insiders"})
 
 
@@ -144,6 +143,8 @@ def _search_examples(*examples: tuple[str, str, dict]) -> dict:
     }
 
 
+
+
 def _semantic_by_text_examples() -> dict:
     """Examples for semantic search by free text."""
     return _search_examples(
@@ -194,14 +195,39 @@ def _semantic_by_document_examples() -> dict:
     """Examples for semantic similarity by existing document IDs."""
     return _search_examples(
         (
-            "Two reference documents",
-            "Semantic similarity aggregated from two indexed documents",
+            "By document IDs",
+            "Semantic similarity aggregated from three indexed documents",
             {
-                "doc_ids": ["DOC-2025-001", "DOC-2025-042"],
+                "doc_ids": [
+                    "https://contrataciondelestado.es/sindicacion/licitacionesPerfilContratante/17311447",
+                    "https://contrataciondelestado.es/sindicacion/licitacionesPerfilContratante/17716704",
+                    "https://contrataciondelestado.es/sindicacion/licitacionesPerfilContratante/18126692"
+                ],
                 "filters": {
                     "date": "2025",
                     "cpv": "72*",
                 },
+                "pagination": {"start": 0, "rows": 10},
+            },
+        ),
+        (
+            "By expediente",
+            "Resolve expediente to all matching documents and find similar ones",
+            {
+                "doc_ids": [],
+                "expedientes": ["2025-9923", "Z25AU051/F2F", "2025-9923"],
+                "filters": {
+                    "date": "2025",
+                },
+                "pagination": {"start": 0, "rows": 10},
+            },
+        ),
+        (
+            "Mixed IDs and expedientes",
+            "Combine explicit document IDs with expediente resolution",
+            {
+                "doc_ids": ["https://contrataciondelestado.es/sindicacion/licitacionesPerfilContratante/17311447"],
+                "expedientes": ["Z25AU051/F2F", "2025-9923"],
                 "pagination": {"start": 0, "rows": 10},
             },
         ),
@@ -232,10 +258,13 @@ def _semantic_by_document_examples() -> dict:
 # Metadata queries
 # ======================================================
 @router.get(
-    "/corpora/{corpus_collection}/documents/{doc_id:path}",
+    "/corpora/{corpus_collection}/documents",
     response_model=DataResponse,
-    summary="Get document metadata",
-    description="Retrieve all metadata associated with a specific document.",
+    summary="Get document metadata by ID or expediente",
+    description=(
+        "Retrieve all metadata associated with a specific document. "
+        "Provide either 'id' or 'expediente' (one is required)."
+    ),
     responses=error_responses(
         NotFoundException, SolrException,
         NotFoundException="Document or corpus not found",
@@ -243,13 +272,28 @@ def _semantic_by_document_examples() -> dict:
 )
 async def get_document_metadata(
     request: Request,
-    corpus_collection: str = Path(..., description="Corpus collection name"),
-    doc_id: str = Path(..., description="Document ID"),
+    corpus_collection: str = Path(..., description="Corpus collection name", example="place"),
+    id: str = Query(
+        None,
+        description="Document ID",
+        example="https://contrataciondelestado.es/sindicacion/PlataformasAgregadasSinMenores/19192364",
+    ),
+    expediente: str = Query(
+        None,
+        description="Expediente number",
+        example="2025/180",
+    ),
 ) -> DataResponse:
-    """Get document metadata by ID."""
+    """Get document metadata by ID or expediente."""
+    if id is None and expediente is None:
+        raise NotFoundException("Provide either 'id' or 'expediente'")
     sc = request.app.state.solr_client
     try:
-        result = sc.do_Q6(corpus_col=corpus_collection, doc_id=doc_id)
+        result = sc.do_Q6(
+            corpus_col=corpus_collection,
+            doc_id=id,
+            expediente=expediente,
+        )
         return DataResponse(success=True, data=result)
     except APIException:
         raise
@@ -261,7 +305,7 @@ async def get_document_metadata(
     "/corpora/{corpus_collection}/metadata-fields",
     response_model=DataResponse,
     summary="Get corpus metadata fields",
-    description="Returns the list of metadata fields available in a corpus.",
+    description="Returns the union of all fields present across every document in the corpus, excluding internal fields (doc_hash, _version_).",
     responses=error_responses(
         NotFoundException, SolrException,
         NotFoundException="Corpus not found",
@@ -269,12 +313,12 @@ async def get_document_metadata(
 )
 async def get_corpus_metadata_fields(
     request: Request,
-    corpus_collection: str = Path(..., description="Corpus collection name"),
+    corpus_collection: str = Path(..., description="Corpus collection name", example="place"),
 ) -> DataResponse:
-    """Get metadata fields of a corpus."""
+    """Get all available metadata fields of a corpus."""
     sc = request.app.state.solr_client
     try:
-        result = sc.do_Q2(corpus_col=corpus_collection)
+        result = sc.get_available_fields(corpus_col=corpus_collection)
         return DataResponse(success=True, data=result)
     except APIException:
         raise
@@ -303,7 +347,7 @@ async def get_corpus_metadata_fields(
 )
 async def semantic_search_by_text(
     request: Request,
-    corpus_collection: str = Path(..., description="Corpus collection name"),
+    corpus_collection: str = Path(..., description="Corpus collection name", example="place"),
     body: SemanticSearchByTextRequest = Body(...),
 ) -> DataResponse:
     """Semantic search using BERT embeddings."""
@@ -365,11 +409,10 @@ async def semantic_search_by_text(
 @router.post(
     "/corpora/{corpus_collection}/semantic/by-document",
     response_model=DataResponse,
-    summary="Semantically similar documents by document ID(s)",
+    summary="Semantically similar documents by document ID(s) or expediente(s)",
     description=(
         "Find documents semantically similar to one or more existing indexed "
-        "documents. Accepts a list of document IDs and returns results "
-        "aggregated across all reference documents."
+        "documents. Accepts a list of IDs and/or expedientes as reference points."
     ),
     responses=error_responses(
         NotFoundException, SolrException,
@@ -379,24 +422,32 @@ async def semantic_search_by_text(
 )
 async def similar_documents_by_id(
     request: Request,
-    corpus_collection: str = Path(..., description="Corpus collection name"),
+    corpus_collection: str = Path(..., description="Corpus collection name", example="place"),
     body: SimilarByDocumentRequest = Body(...),
 ) -> DataResponse:
     """Find documents semantically similar to one or more existing documents."""
     sc = request.app.state.solr_client
     try:
-        # TODO: implement multi-doc aggregation; for now process each ID
-        all_results = []
-        for doc_id in body.doc_ids:
-            result = sc.do_Q21_by_doc(
-                corpus_col=corpus_collection,
-                doc_id=doc_id,
-                filter_query=_build_filter_query(body.filters),
-                start=body.pagination.start,
-                rows=body.pagination.rows,
-            )
-            all_results.extend(result if isinstance(result, list) else [result])
-        return DataResponse(success=True, data=all_results)
+        doc_ids = list(body.doc_ids)
+
+        # Resolve expedientes → doc IDs (one expediente may match several docs)
+        for exp in (body.expedientes or []):
+            resolved = sc.do_Q6(corpus_col=corpus_collection, expediente=exp)
+            if resolved:
+                docs, _ = resolved
+                doc_ids.extend(d["id"] for d in docs if "id" in d)
+
+        if not doc_ids:
+            raise NotFoundException("No documents found for the provided IDs or expedientes")
+
+        result = sc.do_Q21_by_doc(
+            corpus_col=corpus_collection,
+            doc_ids=doc_ids,
+            filter_query=_build_filter_query(body.filters),
+            start=body.pagination.start,
+            rows=body.pagination.rows,
+        )
+        return DataResponse(success=True, data=result)
     except APIException:
         raise
     except Exception as e:

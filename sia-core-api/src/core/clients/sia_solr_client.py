@@ -13,6 +13,8 @@ import json
 import logging
 import math
 import pathlib
+import requests
+import numpy as np
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple, Union
 from src.core.entities.tools import SIATools
@@ -910,6 +912,47 @@ class SIASolrClient(SolrClient):
 
         return {'metadata_fields': Metadatadisplayed}, sc
 
+    def get_available_fields(
+        self,
+        corpus_col: str
+    ) -> Union[dict, int]:
+        """Returns the union of all fields present across every document in
+        the collection, excluding internal fields doc_hash and _version_.
+
+        Uses the Solr Luke handler (/admin/luke?numTerms=0) which reports
+        every field that exists in the index regardless of whether a given
+        document has a value for it.
+
+        Parameters
+        ----------
+        corpus_col: str
+            Name of the corpus collection.
+
+        Returns
+        -------
+        dict with key 'metadata_fields' listing field names, and status code.
+        """
+        corpus_col = corpus_col.lower()
+
+        if not self.check_is_corpus(corpus_col):
+            return
+
+        _exclude = {'doc_hash', '_version_', 'SearcheableField', 'SearcheableField_str'}
+        url = f'{self.solr_url}/solr/{corpus_col}/admin/luke'
+        resp = requests.get(url, params={'numTerms': '0', 'wt': 'json'})
+
+        if resp.status_code != 200:
+            self.logger.error(
+                f"-- -- Error retrieving Luke fields for {corpus_col}.")
+            return
+
+        fields = sorted(
+            name
+            for name in resp.json().get('fields', {}).keys()
+            if name not in _exclude
+        )
+        return {'metadata_fields': fields}, resp.status_code
+
     def do_Q3(
         self,
         col: str
@@ -1046,7 +1089,8 @@ class SIASolrClient(SolrClient):
     def do_Q6(
         self,
         corpus_col: str,
-        doc_id: str
+        doc_id: str = None,
+        expediente: str = None,
     ) -> Union[dict, int]:
         """Executes query Q6.
 
@@ -1054,8 +1098,10 @@ class SIASolrClient(SolrClient):
         ----------
         corpus_col: str
             Name of the corpus collection
-        doc_id: str
-            ID of the document whose metadata is going to be retrieved
+        doc_id: str, optional
+            ID of the document whose metadata is going to be retrieved.
+        expediente: str, optional
+            If provided, search by the 'expediente' field instead of 'id'.
 
         Returns
         -------
@@ -1072,14 +1118,11 @@ class SIASolrClient(SolrClient):
         if not self.check_is_corpus(corpus_col):
             return
 
-        # 2. Get meta fields
-        #meta_fields_dict, sc = self.do_Q2(corpus_col)
-        #meta_fields = ','.join(meta_fields_dict['metadata_fields'])
-
-        #self.logger.info("-- -- These are the meta fields: " + meta_fields)
-
-        # 3. Execute query
-        q6 = self.querier.customize_Q6(id=doc_id)
+        # 2. Execute query
+        if expediente is not None:
+            q6 = self.querier.customize_Q6(value=expediente, field='expediente')
+        else:
+            q6 = self.querier.customize_Q6(value=doc_id, field='id')
         params = {k: v for k, v in q6.items() if k != 'q'}
 
         sc, results = self.execute_query(
@@ -1090,7 +1133,7 @@ class SIASolrClient(SolrClient):
                 f"-- -- Error executing query Q6. Aborting operation...")
             return
 
-        _exclude = {'doc_hash', '_version_'}
+        _exclude = {'doc_hash', '_version_', 'SearcheableField'}
         docs = [{k: v for k, v in doc.items() if k not in _exclude}
                 for doc in results.docs]
         return docs, sc
@@ -1588,7 +1631,7 @@ class SIASolrClient(SolrClient):
         rows:int,
         filter_query:str = None,
         keyword:str = None,
-        query_fields:str="raw_text", #"tile objective"
+        query_fields:str="SearcheableField",
     ) -> Union[dict,int]:
         """
         Executes query Q21.
@@ -1605,14 +1648,14 @@ class SIASolrClient(SolrClient):
             Number of documents to be retrieved
         filter_query: str, optional
             Pre-built Solr fq string to narrow results (e.g.
-            ``"updated:2024-01-01T00:00:00Z AND cpv_list:72000000"``).
+            "updated:2024-01-01T00:00:00Z AND cpv_list:72000000").
             Combined with any fq already present in the query using AND.
         keyword: str, optional
             If provided, combines the vector search with a BM25 keyword
             match (Q21_e variant).
         query_fields: str, optional
-            Solr fields to search with BM25 when ``keyword`` is set.
-            Defaults to ``"raw_text"``.
+            Solr fields to search with BM25 when keyword is set.
+            Defaults to "SearcheableField".
 
         Returns
         -------
@@ -1673,6 +1716,191 @@ class SIASolrClient(SolrClient):
                 f"-- -- Error executing query Q21. Aborting operation...")
             return
 
+        return results.docs, sc
+    
+    def do_Q21_by_doc(
+        self,
+        corpus_col: str,
+        doc_ids: list[str],          
+        start: int,
+        rows: int,
+        filter_query: str = None,
+        keyword: str = None,
+        query_fields: str = "raw_text",
+        aggregation: str = "centroid"  # "centroid" | "rrf"
+    ) -> Union[dict, int]:
+        """
+        Looks for documents similar to a given set of reference documents (identified by doc_ids).
+
+        Parameters
+        ----------
+        doc_ids : list[str]
+            IDs of the reference documents (already indexed in Solr).
+        aggregation : str
+            - "centroid": average of embeddings, hence 1 query (better if docs are similar to each other)
+            - "rrf": Reciprocal Rank Fusion of individual searches (better if they are diverse)
+        """
+        corpus_col = corpus_col.lower()
+
+        if not self.check_is_corpus(corpus_col):
+            return None, 400
+
+        # 1. Retrieve embeddings directly from Solr (already indexed)
+        embeddings = self._fetch_embeddings_from_solr(corpus_col, doc_ids)
+
+        # 2. For docs missing embeddings, compute them from text fields
+        missing = [doc_id for doc_id in doc_ids if doc_id not in embeddings]
+        if missing:
+            embeddings.update(
+                self._compute_embeddings_for_docs(corpus_col, missing)
+            )
+
+        if not embeddings:
+            self.logger.error(f"-- -- Could not retrieve embeddings for doc_ids: {doc_ids}")
+            return None, 500
+
+        if aggregation == "centroid":
+            return self._q21_by_centroid(
+                corpus_col, embeddings, start, rows, filter_query, keyword, query_fields
+            )
+        elif aggregation == "rrf":
+            return self._q21_by_rrf(
+                corpus_col, embeddings, doc_ids, start, rows, filter_query, keyword, query_fields
+            )
+        else:
+            raise ValueError(f"Unknown aggregation method: {aggregation}")
+
+
+    def _fetch_embeddings_from_solr(
+        self, corpus_col: str, doc_ids: list[str]
+    ) -> dict[str, list[float]]:
+        """
+        Retrieves the embedding vectors of the already indexed documents.
+        Returns {doc_id: embedding_vector}.
+        """
+        ids_filter = " OR ".join(f'id:"{doc_id}"' for doc_id in doc_ids)
+        sc, results = self.execute_query(
+            q=ids_filter,
+            col_name=corpus_col,
+            fl="id,embeddings",   # adjust the name of the embeddings field
+            rows=len(doc_ids),
+        )
+        if sc != 200 or not results.docs:
+            return {}
+
+        return {
+            doc["id"]: doc["embeddings"]
+            for doc in results.docs
+            if "embeddings" in doc
+        }
+
+    def _compute_embeddings_for_docs(
+        self, corpus_col: str, doc_ids: list[str]
+    ) -> dict[str, list[float]]:
+        """Computes embeddings for docs that have none stored in Solr.
+
+        Tries 'generative_objective' first, then 'objeto' as fallback text source.
+        """
+        ids_filter = " OR ".join(f'id:"{doc_id}"' for doc_id in doc_ids)
+        sc, results = self.execute_query(
+            q=ids_filter,
+            col_name=corpus_col,
+            fl="id,generative_objective,objeto",
+            rows=len(doc_ids),
+        )
+        if sc != 200 or not results.docs:
+            return {}
+
+        computed = {}
+        for doc in results.docs:
+            text = doc.get("generative_objective") or doc.get("objeto")
+            if not text:
+                self.logger.warning(
+                    f"-- -- No text field found for doc {doc['id']}, skipping embedding computation."
+                )
+                continue
+            emb = self.sia_tools.get_embedding(text)
+            if emb is not None:
+                computed[doc["id"]] = emb
+            else:
+                self.logger.warning(
+                    f"-- -- Could not compute embedding for doc {doc['id']}."
+                )
+        return computed
+
+    def _q21_by_centroid(
+        self, corpus_col, embeddings, start, rows, filter_query, keyword, query_fields
+    ):
+        """Aggregates embeddings as a centroid and performs a single search."""
+
+        vectors = list(embeddings.values())
+        centroid = np.mean(vectors, axis=0).tolist()
+
+        # Reuse the logic of do_Q21 directly with the centroid
+        return self._execute_vector_query(
+            corpus_col, centroid, start, rows, filter_query, keyword, query_fields
+        )
+
+
+    def _q21_by_rrf(
+        self, corpus_col, embeddings, doc_ids, start, rows, filter_query, keyword, query_fields
+    ):
+        """
+        Looks for documents similar to each reference document individually and merges results using RRF.
+        RRF score: sum(1 / (k + rank_i))  — k=60 is the standard value.
+        """
+        RRF_K = 60
+        scores: dict[str, float] = {}
+        docs_cache: dict[str, dict] = {}
+
+        # Request more results per query to have sufficient overlap in RRF
+        fetch_rows = min(rows * 3, 100)
+
+        for _, emb in embeddings.items():
+            result_docs, sc = self._execute_vector_query(
+                corpus_col, emb, 0, fetch_rows, filter_query, keyword, query_fields
+            )
+            if sc != 200 or not result_docs:
+                continue
+
+            for rank, doc in enumerate(result_docs):
+                rid = doc["id"]
+                # Exclude the reference documents themselves
+                if rid in doc_ids:
+                    continue
+                docs_cache[rid] = doc
+                scores[rid] = scores.get(rid, 0.0) + 1.0 / (RRF_K + rank + 1)
+
+        # Sort by RRF score and paginate
+        ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+        paginated = ranked[start: start + rows]
+
+        merged_docs = [docs_cache[rid] for rid, _ in paginated]
+        return merged_docs, 200
+
+
+    def _execute_vector_query(
+        self, corpus_col, emb, start, rows, filter_query, keyword, query_fields
+    ):
+        """Helper that reproduces the core of do_Q21 given an already calculated embedding."""
+        start, rows = self.custom_start_and_rows(start, rows, corpus_col)
+
+        if keyword is None:
+            q_obj = self.querier.customize_Q21(doc_embeddings=emb, start=start, rows=rows)
+        else:
+            q_obj = self.querier.customize_Q21_e(
+                doc_embeddings=emb, keyword=keyword,
+                query_fields=query_fields, start=start, rows=rows
+            )
+
+        params = {k: v for k, v in q_obj.items() if k != 'q'}
+        if filter_query:
+            existing_fq = params.get('fq')
+            params['fq'] = f"({existing_fq}) AND ({filter_query})" if existing_fq else filter_query
+
+        sc, results = self.execute_query(q=q_obj['q'], col_name=corpus_col, **params)
+        if sc != 200:
+            return None, sc
         return results.docs, sc
     
     def do_Q22( # this is not a predefined query, but a wrapper over the inferencer that gets the information for the predicted topic

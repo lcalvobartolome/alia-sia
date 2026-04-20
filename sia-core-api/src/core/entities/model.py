@@ -312,7 +312,7 @@ class Model(object):
 
 if __name__ == '__main__':
     model = Model(pathlib.Path(
-        "/export/usuarios_ml4ds/lbartolome/NextProcurement/NP-Backend-Dockers/data/source/Mallet_5_topics"))
+        "/export/usuarios_ml4ds/lbartolome/NextProcurement/NP-Backend-Dockers/mnt/data/Mallet_5_topics"))
     #json_lst = model.get_model_info_update(action='set')
     #pos = model.get_topic_pos()
     #print(json_lst[0])

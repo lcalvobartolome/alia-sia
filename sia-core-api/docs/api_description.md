@@ -8,7 +8,7 @@ RESTful API for the Public Procurement and Grants Intelligence and Analysis Syst
 
 ### 1. Infrastructure Administration (`/admin`)
 
-This block includes low-level operations for technical management and dynamic system configuration. It allows the creation, listing, reloading and deletion of Solr indexes, as well as the management of metadata and search field configurations used across the system.
+This block includes low-level operations for technical management and dynamic system configuration. It allows the creation, listing, reloading and deletion of Solr indexes.
 
 ### 2. Data Enrichment and Ingestion (`/processing`)
 

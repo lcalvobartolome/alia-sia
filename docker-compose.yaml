@@ -19,8 +19,9 @@ services:
       #networks:
       #  - np-net
     volumes:
-      - /export/data_ml4ds/alia/place/:/data/source
+      - /export/data_ml4ds/alia/place/:/mnt/data
       - ./sia-config:/config
+      - ./db/data/sqlite3/pipeline_jobs.db:/data/pipeline_jobs.db
     deploy:
       resources:
         limits:

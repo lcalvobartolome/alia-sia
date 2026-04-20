@@ -219,7 +219,7 @@ class Queries(object):
         # 3. Execute Q6
         # ================================================================
         self.Q6 = {
-            'q': 'id:{}',
+            'q': '{}:{}',
             'fl': '*'
         }
 
@@ -323,7 +323,7 @@ class Queries(object):
         # ################################################################
         self.Q21 = {
             'q': "{{!knn f=embeddings topK=100}}{}",
-            'fl': "id,generative_objective,link,place_id,score",
+            'fl': "id,expediente,generative_objective,link,score",
             'start': '{}',
             'rows': '{}'
         }
@@ -332,7 +332,7 @@ class Queries(object):
         self.Q21_e = {
             'q': "{{!knn f=embeddings topK=100}}{}",
             'fq': '{{!edismax qf={}}} {}',
-            'fl': 'id,generative_objective,link,place_id,score',
+            'fl': 'id,expediente,generative_objective,link,score',
             'start': '{}',
             'rows': '{}'
         }
@@ -471,13 +471,16 @@ class Queries(object):
         return custom_q5
 
     def customize_Q6(self,
-                     id: str) -> dict:
-        """Customizes query Q6 'getMetadataDocById'
+                     value: str,
+                     field: str = 'id') -> dict:
+        """Customizes query Q6 to retrieve document metadata by a given field.
 
         Parameters
         ----------
-        id: str
-            Document id.
+        value: str
+            Value to search for.
+        field: str
+            Solr field to match against (default: 'id').
 
         Returns
         -------
@@ -485,9 +488,9 @@ class Queries(object):
             Customized query Q6 returning all Solr fields except doc_hash and _version_.
         """
 
-        escaped_id = re.sub(r'([+\-&|!(){}\[\]^"~*?:\\/])', r'\\\1', id)
+        escaped_value = re.sub(r'([+\-&|!(){}\[\]^"~*?:\\/])', r'\\\1', value)
         custom_q6 = {
-            'q': self.Q6['q'].format(escaped_id),
+            'q': self.Q6['q'].format(field, escaped_value),
             'fl': self.Q6['fl']
         }
 

@@ -16,12 +16,12 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import AsyncGenerator
 
-from fastapi import Depends, FastAPI, HTTPException, Request  # type: ignore
+from fastapi import Depends, FastAPI, Request  # type: ignore
 from fastapi.middleware.cors import CORSMiddleware  # type: ignore
 from fastapi.openapi.utils import get_openapi  # type: ignore
 from src.api.exceptions import register_exception_handlers
 from src.api.routers.admin import router as admin_router
-from src.api.routers.processing import router as processing_router
+from src.api.routers.processing import router as processing_router, init_db
 from src.api.routers.services import router as exploitation_router
 from src.api.schemas import HealthResponse
 from src.core.clients.sia_solr_client import SIASolrClient
@@ -74,6 +74,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception as e:
         logger.error(f"Error initializing Solr client: {e}")
         raise
+
+    init_db()
+    logger.info("Pipeline job store initialized")
 
     yield
 

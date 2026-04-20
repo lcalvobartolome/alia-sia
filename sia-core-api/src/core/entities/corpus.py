@@ -168,7 +168,7 @@ class Corpus(object):
             section = "place" + "-config"
         else:
             self._logger.error(
-                f"Corpus configuration {"place"} not found in config file.")
+                f"Corpus configuration {'place'} not found in config file.")
 
         self.path_source = pathlib.Path(
             "/export/data_ml4ds/alia/place"

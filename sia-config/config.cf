@@ -20,7 +20,7 @@ searchable_fields=id,title,generative_objective,cpv,cpv_predicted,criterios_adju
 thetas_max_sum=1000
 betas_max_sum=1000
 max_sum_neural_models=100000
-path_source=/data/source
+path_source=/mnt/data
 
 [inferencer]
 thetas_thr=3e-3

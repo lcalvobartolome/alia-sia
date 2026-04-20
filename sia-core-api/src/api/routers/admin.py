@@ -17,19 +17,14 @@ Date: 27/03/2023
 Modified: 04/02/2026 (Migrated to FastAPI and reorganized)
 """
 
-from typing import Optional
-from fastapi import APIRouter, Depends, Request, Query, Path, Body # type: ignore
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, Request, Path, Body # type: ignore
 from src.api.schemas import (
     CollectionCreateRequest,
     ResponseBase,
     CollectionResponse,
     CollectionListResponse,
     SolrQueryParams,
-    SolrQueryResponse,
-    CorpusListResponse,
-    ModelsListResponse,
-    CorpusModelsResponse,
+    SolrQueryResponse
 )
 from src.api.exceptions import (
     APIException,
@@ -184,96 +179,6 @@ async def execute_raw_query(
             success=True,
             data=results.docs,
             num_found=getattr(results, 'num_found', len(results.docs))
-        )
-    except APIException:
-        raise
-    except Exception as e:
-        raise SolrException(str(e))
-
-
-# ======================================================
-# Corpora Management
-# ======================================================
-@router.get(
-    "/corpora",
-    response_model=CorpusListResponse,
-    summary="List all corpora",
-    description="Returns the list of all corpora indexed in the system.",
-    responses=error_responses(SolrException),
-)
-async def list_all_corpora(
-    request: Request
-) -> CorpusListResponse:
-    """List all available corpora."""
-    sc = request.app.state.solr_client
-    try:
-        corpus_lst, code = sc.list_corpus_collections()
-        if code != 200:
-            raise SolrException(f"Error listing corpora (code: {code})")
-        return CorpusListResponse(
-            success=True,
-            corpora=corpus_lst
-        )
-    except APIException:
-        raise
-    except Exception as e:
-        raise SolrException(str(e))
-
-
-@router.get(
-    "/corpora/{corpus_col}/models",
-    response_model=CorpusModelsResponse,
-    summary="List topic models of a corpus",
-    description="Lists all topic models associated with a specific corpus.",
-    responses=error_responses(
-        NotFoundException, SolrException,
-        NotFoundException="Corpus not found",
-    ),
-)
-async def list_corpus_models(
-    request: Request,
-    corpus_col: str = Path(..., description="Name of the corpus collection"),
-) -> CorpusModelsResponse:
-    """List models associated with a corpus."""
-    sc = request.app.state.solr_client
-    try:
-        models_lst, code = sc.get_corpus_models(corpus_col=corpus_col)
-        if code != 200:
-            raise SolrException(f"Error getting models (code: {code})")
-                
-        return CorpusModelsResponse(
-            success=True,
-            models=models_lst
-        )
-    except APIException:
-        raise
-    except Exception as e:
-        raise SolrException(str(e))
-
-
-# ======================================================
-# Models Management
-# ======================================================
-@router.get(
-    "/models",
-    response_model=ModelsListResponse,
-    summary="List all models",
-    description="Lists all topic models available in the system.",
-    responses=error_responses(SolrException),
-)
-async def list_all_models(
-    request: Request
-) -> ModelsListResponse:
-    """List all topic models."""
-    sc = request.app.state.solr_client
-    try:
-        models_lst, code = sc.list_model_collections()
-        if code != 200:
-            raise SolrException(f"Error listing models (code: {code})")
-        
-        return ModelsListResponse(
-            success=True,
-            models=models_lst
         )
     except APIException:
         raise
