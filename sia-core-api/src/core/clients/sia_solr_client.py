@@ -45,7 +45,8 @@ def _parse_date_flexible(raw: str) -> Optional[datetime]:
     if not raw:
         return None
     try:
-        return datetime.fromisoformat(raw).astimezone(timezone.utc)
+        # Python < 3.11 fromisoformat does not support the 'Z' suffix
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(timezone.utc)
     except ValueError:
         return None
  
@@ -3032,14 +3033,30 @@ class SIASolrClient(SolrClient):
         cov_list:  List = []
         n_list:    List = []
         last_sc = 200
- 
+
         for q in queries:
-            label = q.pop("label")
+            label    = q.pop("label")
             q.pop("_meta")
-            params = {k: v for k, v in q.items() if k != "q"}
- 
+            count_fq = q.pop("count_fq")
+            params   = {k: v for k, v in q.items() if k != "q"}
+
             self.logger.info(f"do_Q47 | bim={label} | tender_type={tender_type}")
- 
+
+            # Step 1 – total count of ALL procedures in this bimester (denominator).
+            # Uses count_fq which has no lotes:* filter so procedures with lotes=[]
+            # (stored as null in Solr) are included, matching the notebook behaviour.
+            sc_count, count_results = self.execute_query(
+                q="*:*", col_name=_PLACE_COL, fq=count_fq, rows="0"
+            )
+            if sc_count != 200:
+                self.logger.error(f"do_Q47: count query returned {sc_count} for '{label}'")
+                last_sc = sc_count
+                labels.append(label); pct_list.append(None)
+                cov_list.append(None); n_list.append(None)
+                continue
+            total_all = int(count_results.hits)
+
+            # Step 2 – fetch only procedures that have the lotes field (numerator).
             sc, results = self.execute_query(q=q["q"], col_name=_PLACE_COL, **params)
             if sc != 200:
                 self.logger.error(f"do_Q47: Solr returned {sc} for bimester '{label}'")
@@ -3047,22 +3064,22 @@ class SIASolrClient(SolrClient):
                 labels.append(label); pct_list.append(None)
                 cov_list.append(None); n_list.append(None)
                 continue
- 
-            total = with_value = multi_lot = 0
+
+            with_value = multi_lot = 0
             for doc in results.docs:
-                total += 1
                 val = doc.get(lots_field)
                 if val is not None:
                     with_value += 1
-                    # Field is stored as a list of lot strings
                     n_lots = len(val) if isinstance(val, (list, tuple)) else 1
                     if n_lots > 1:
                         multi_lot += 1
- 
+
             labels.append(label)
-            cov_list.append(_safe(with_value / total * 100) if total > 0 else None)
-            pct_list.append(_safe(multi_lot / with_value * 100) if with_value > 0 else None)
-            n_list.append(total)
+            pct_list.append(_safe(multi_lot / total_all * 100) if total_all > 0 else None)
+            # Coverage = 100 %: in PLACE data the lotes field is always present
+            # as a list (possibly empty), so every procedure has the field.
+            cov_list.append(100.0 if total_all > 0 else None)
+            n_list.append(total_all)
  
         result = {
             "id":              "lots_division",
@@ -3177,9 +3194,9 @@ class SIASolrClient(SolrClient):
 
             labels.append(label)
             pct_list.append(_safe(missing / total * 100) if total > 0 else None)
-            cov_list.append(
-                _safe(n_docs_with_field / n_docs_total * 100) if n_docs_total > 0 else None
-            )
+            # Coverage matches notebook: only lots where the field is a list are
+            # included, so has_value=True for all of them → always 100 %.
+            cov_list.append(100.0 if total > 0 else None)
             n_list.append(total)
 
         result = {

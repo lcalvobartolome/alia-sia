@@ -50,13 +50,13 @@ def _tr_list(labels):
 # ---------------------------------------------------------------------------
 # Figure / font settings
 # ---------------------------------------------------------------------------
-FONT_SIZE   = 22
-TITLE_SIZE  = 23
-LEGEND_SIZE = 20
-TICK_SIZE   = 19
+FONT_SIZE   = 42
+TITLE_SIZE  = 44
+LEGEND_SIZE = 38
+TICK_SIZE   = 36
 DPI         = 300
-FIG_W       = 11   # inches – single panel
-FIG_H       = 7
+FIG_W       = 14   # inches – single panel
+FIG_H       = 10
 
 _COLORS = ["#86d8df", "#d8a2a0", "#b8dba0"]
 
@@ -138,7 +138,7 @@ def _save(fig, path):
 def plot_ind0(data_by_src, out_dir):
     """Indicator 0 – two sub-plots: tender count and aggregated budget."""
     fig, axes = plt.subplots(1, 2, figsize=(FIG_W * 2, FIG_H))
-    plt.subplots_adjust(wspace=0.30)
+    plt.subplots_adjust(wspace=0.30, top=0.88)
 
     for col, (key, ylabel, title, div) in enumerate([
         ("by_count",  "Number of tenders",
@@ -162,16 +162,17 @@ def plot_ind0(data_by_src, out_dir):
 
     handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="upper center", ncol=len(handles),
-               fontsize=LEGEND_SIZE, frameon=True, bbox_to_anchor=(0.5, 1.02))
+               fontsize=LEGEND_SIZE, frameon=True, bbox_to_anchor=(0.5, 1.02),
+               columnspacing=2.0, handletextpad=0.8)
     _save(fig, os.path.join(out_dir, "indicador0.png"))
 
 
 def _plot_dual(data_by_src, key_val, key_cov, ylabel_val, ylabel_cov,
                title_val, title_cov, out_path, pct=True, multi_src=True,
-               show_legend=False):
+               show_legend=False, ytick_step=None):
     """Generic two-panel plot: indicator value (left) + coverage (right)."""
     fig, axes = plt.subplots(1, 2, figsize=(FIG_W * 2, FIG_H))
-    plt.subplots_adjust(wspace=0.30)
+    plt.subplots_adjust(wspace=0.30, top=0.88)
 
     for col, (key, ylabel, title) in enumerate([
         (key_val, ylabel_val, title_val),
@@ -196,12 +197,25 @@ def _plot_dual(data_by_src, key_val, key_cov, ylabel_val, ylabel_cov,
         labels_en = labels_en or []
         _grouped_bars(axes[col], labels_en, series, pct=pct)
         _style(axes[col], title, ylabel, labels_en)
+        if ytick_step is not None:
+            step = ytick_step[col] if isinstance(ytick_step, (list, tuple)) else ytick_step
+            if step is not None:
+                axes[col].yaxis.set_major_locator(mticker.MultipleLocator(step))
+        if pct:
+            ymax = axes[col].get_ylim()[1]
+            if ymax <= 1:
+                axes[col].yaxis.set_major_formatter(
+                    mticker.FuncFormatter(lambda v, _: f"{v:.2f}%"))
+            elif ymax <= 5:
+                axes[col].yaxis.set_major_formatter(
+                    mticker.FuncFormatter(lambda v, _: f"{v:.1f}%"))
 
     if show_legend:
         if multi_src:
             handles, lbl = axes[0].get_legend_handles_labels()
             fig.legend(handles, lbl, loc="upper center", ncol=len(handles),
-                       fontsize=LEGEND_SIZE, frameon=True, bbox_to_anchor=(0.5, 1.02))
+                       fontsize=LEGEND_SIZE, frameon=True, bbox_to_anchor=(0.5, 1.02),
+                       columnspacing=2.0, handletextpad=0.8)
         else:
             axes[0].legend(fontsize=LEGEND_SIZE, frameon=True)
     _save(fig, out_path)
@@ -369,7 +383,7 @@ def fetch_and_plot(args):
         "% procedures", "Coverage (%)",
         "Ind. 12a – Missing buyer ID (% procedures w/o buyer identifier)",
         "Ind. 12b – Coverage of buyer ID field",
-        os.path.join(out_dir, "indicador12.png"), pct=True,
+        os.path.join(out_dir, "indicador12.png"), pct=True, ytick_step=(None, 25),
     )
 
     print("\nAll figures saved.")

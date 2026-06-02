@@ -1396,15 +1396,20 @@ class Queries(object):
             topic_id=topic_id, topic_min_weight=topic_min_weight,
             extra_fq=extra_fq,
         )
+        # base_fq_with_lots filters to procedures with non-null lotes (numerator query).
+        # base_fq is kept without lotes:* for the total-count query (denominator),
+        # which must include procedures where lotes=[] (serialised as null in Solr).
+        base_fq_with_lots = base_fq + [f"{lots_field}:*"]
 
         return [
             {
-                "label": r["label"],
-                "q":     "*:*",
-                "fq":    _bimester_fq(base_fq, date_field, r),
-                "fl":    lots_field,
-                "rows":  "1000000",
-                "_meta": {"range": r},
+                "label":     r["label"],
+                "q":         "*:*",
+                "fq":        _bimester_fq(base_fq_with_lots, date_field, r),
+                "count_fq":  _bimester_fq(base_fq, date_field, r),
+                "fl":        lots_field,
+                "rows":      "1000000",
+                "_meta":     {"range": r},
             }
             for r in ranges
         ]
