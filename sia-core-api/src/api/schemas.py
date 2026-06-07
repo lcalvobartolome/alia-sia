@@ -416,6 +416,7 @@ class ExtractPipelineRequest(BaseModel):
     row_workers: int = Field(4, ge=1)
     semantic_threshold: float = Field(0.6, ge=0.0, le=1.0)
     mallet: str = Field("/opt/mallet/bin/mallet", description="Path to mallet binary")
+    ollama_host: str = Field("http://0.0.0.0:11434", description="Ollama host")
 
     class Config:
         json_schema_extra = {
@@ -429,6 +430,7 @@ class ExtractPipelineRequest(BaseModel):
                 "row_workers": 4,
                 "semantic_threshold": 0.6,
                 "mallet": "/opt/bin/mallet",
+                "ollama-host": "http://0.0.0.0:11434"
             }
         }
 

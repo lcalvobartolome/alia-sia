@@ -1,14 +1,12 @@
-FROM nvidia/cuda:12.1.1-runtime-ubuntu22.04
-
+FROM nvidia/cuda:12.1.1-base-ubuntu22.04
 ARG GITHUB_TOKEN
-
+ARG TARGETARCH
 ENV TZ=Europe/Madrid
 ENV DEBIAN_FRONTEND=noninteractive
-ENV JAVA_HOME="/usr/lib/jvm/java-21-openjdk-amd64"
 ENV MALLET_HOME=/opt/mallet
 ENV PATH="$MALLET_HOME/bin:$PATH"
 
-# Install system dependencies and ensure Java 21 compatibility
+# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common && \
     add-apt-repository -y ppa:deadsnakes/ppa && \
@@ -19,16 +17,30 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git ant wget curl \
     libbz2-dev libffi-dev libgdbm-dev libncurses5-dev \
     libnss3-dev libreadline-dev libsqlite3-dev libssl-dev \
-    tzdata zlib1g-dev libgl1-mesa-glx libgl1-mesa-dev libpython3-dev && \
+    tzdata zlib1g-dev libpython3-dev \
+    gcc g++ build-essential cmake \
+    ca-certificates openssl && \
+    update-ca-certificates && \
+    rm -f /usr/lib/aarch64-linux-gnu/libGLX_indirect.so.0 && \
     apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /root/.cache/*
 
-# Set Java 21 as the default
-RUN update-alternatives --set java /usr/lib/jvm/java-21-openjdk-amd64/bin/java
+# Set JAVA_HOME dynamically based on architecture
+RUN if [ "$TARGETARCH" = "arm64" ]; then \
+        JAVA_PATH=/usr/lib/jvm/java-21-openjdk-arm64; \
+    else \
+        JAVA_PATH=/usr/lib/jvm/java-21-openjdk-amd64; \
+    fi && \
+    update-alternatives --set java ${JAVA_PATH}/bin/java && \
+    echo "JAVA_HOME=${JAVA_PATH}" >> /etc/environment && \
+    echo "export JAVA_HOME=${JAVA_PATH}" >> /etc/profile.d/java.sh && \
+    ln -sf ${JAVA_PATH} /usr/lib/jvm/java-21-openjdk-current
 
-# Verify Java version (should be Java 21)
+ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-current
+
+# Verify Java version
 RUN java -version
 
-# Upgrade pip inside the virtual environment
+# Upgrade pip
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel && pip cache purge
 
 # Set working directory
@@ -37,7 +49,10 @@ WORKDIR /app
 # Copy only requirements file first to optimize caching
 COPY requirements.txt .
 
-# Install project dependencies inside the virtual environment
+# Ensure pip uses updated certificates
+RUN pip config set global.cert /etc/ssl/certs/ca-certificates.crt
+
+# Install project dependencies
 RUN pip install --upgrade pip setuptools wheel
 
 RUN git clone https://x-access-token:${GITHUB_TOKEN}@github.com/lcalvobartolome/portalia-pipeline.git /opt/alia-pipeline && \
@@ -46,19 +61,13 @@ RUN git clone https://x-access-token:${GITHUB_TOKEN}@github.com/lcalvobartolome/
     pip install --ignore-installed \
         https://github.com/explosion/spacy-models/releases/download/es_core_news_lg-3.8.0/es_core_news_lg-3.8.0-py3-none-any.whl && \
     pip cache purge
-    
-# Mallet
-# Download and install Mallet (removing unnecessary files to save space)
-#RUN wget $MALLET_URL -O /tmp/mallet.tar.gz && \
-#    tar -xvzf /tmp/mallet.tar.gz -C /opt && \
-#    mv /opt/Mallet-${MALLET_VERSION} /opt/mallet && \
-#    rm /tmp/mallet.tar.gz && \
-#    rm -rf /opt/mallet/sample-data  # Remove sample data to reduce image size
-COPY mallet-2.0.8/ /opt/mallet/
 
+# Mallet
+# Mallet
+COPY mallet-2.0.8/ /opt/mallet/
 RUN mkdir -p /mnt/data /data/inference
 
-# Pre-descargar el modelo de embeddings para no descargarlo en runtime
+# Pre-download embeddings model to avoid downloading at runtime
 ARG MODEL_NAME=hiiamsid/sentence_similarity_spanish_es
 RUN python3 - <<EOF
 from sentence_transformers import SentenceTransformer
@@ -66,6 +75,5 @@ SentenceTransformer('${MODEL_NAME}').save('/tmp/huggingface')
 EOF
 
 COPY . .
-
 EXPOSE 10083
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "10083", "--workers", "2"]

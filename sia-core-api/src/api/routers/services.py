@@ -272,16 +272,16 @@ def _semantic_by_document_examples() -> dict:
 )
 async def get_document_metadata(
     request: Request,
-    corpus_collection: str = Path(..., description="Corpus collection name", example="place"),
+    corpus_collection: str = Path(..., description="Corpus collection name", examples=["place"]),
     id: str = Query(
         None,
         description="Document ID",
-        example="https://contrataciondelestado.es/sindicacion/PlataformasAgregadasSinMenores/19192364",
+        examples=["https://contrataciondelestado.es/sindicacion/PlataformasAgregadasSinMenores/19192364"],
     ),
     expediente: str = Query(
         None,
         description="Expediente number",
-        example="2025/180",
+        examples=["2025/180"],
     ),
 ) -> DataResponse:
     """Get document metadata by ID or expediente."""
@@ -313,7 +313,7 @@ async def get_document_metadata(
 )
 async def get_corpus_metadata_fields(
     request: Request,
-    corpus_collection: str = Path(..., description="Corpus collection name", example="place"),
+    corpus_collection: str = Path(..., description="Corpus collection name", examples=["place"]),
 ) -> DataResponse:
     """Get all available metadata fields of a corpus."""
     sc = request.app.state.solr_client
@@ -345,7 +345,7 @@ async def get_corpus_metadata_fields(
 )
 async def semantic_search_by_text(
     request: Request,
-    corpus_collection: str = Path(..., description="Corpus collection name", example="place"),
+    corpus_collection: str = Path(..., description="Corpus collection name", examples=["place"]),
     body: SemanticSearchByTextRequest = Body(...),
 ) -> DataResponse:
     """Semantic search using BERT embeddings."""
@@ -423,7 +423,7 @@ async def semantic_search_by_text(
 )
 async def similar_documents_by_id(
     request: Request,
-    corpus_collection: str = Path(..., description="Corpus collection name", example="place"),
+    corpus_collection: str = Path(..., description="Corpus collection name", examples=["place"]),
     body: SimilarByDocumentRequest = Body(...),
 ) -> DataResponse:
     """Find documents semantically similar to one or more existing documents."""

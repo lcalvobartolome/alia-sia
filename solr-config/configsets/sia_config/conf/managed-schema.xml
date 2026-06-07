@@ -163,7 +163,7 @@
  <field name="nwords_per_doc" type="pint" indexed="true" stored="true" multiValued="false" />
  <field name="semantic_score" type="pfloat" indexed="true" stored="true" multiValued="false" />
  <field name="is_relevant" type="boolean" indexed="true" stored="true" multiValued="false" />
- <field name="keyword_counts" type="pint" indexed="true" stored="true" multiValued="false" />
+ <field name="keyword_counts" type="text_general" indexed="true" stored="true" multiValued="false" />
  <field name="total_keyword_count" type="pint" indexed="true" stored="true" multiValued="false" />
 
   <!-- Model fields  -->

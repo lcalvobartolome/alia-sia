@@ -171,8 +171,8 @@ class Corpus(object):
                 f"Corpus configuration {'place'} not found in config file.")
 
         self.path_source = pathlib.Path(
-            "/export/data_ml4ds/alia/place"
-            #cf.get('restapi', 'path_source')
+            #"/export/data_ml4ds/alia/place"
+            cf.get('restapi', 'path_source')
         )
         self.id_field = cf.get(section, "id_field")
         self.title_field = cf.get(section, "title_field")
@@ -359,7 +359,6 @@ class Corpus(object):
                 else [float(v) for v in x.split()] if isinstance(x, str)
                 else x
             )
-        import pdb; pdb.set_trace()
 
         # Any other columns that are still np.ndarray
         for col in df_enriched.columns:
@@ -460,6 +459,12 @@ class Corpus(object):
             cols_keep = [col for col in cols_keep if col in df.columns]
             df = df[cols_keep]
             self._logger.info(f"Columns: {list(df.columns)}")
+
+            # keyword_counts is a list of [keyword, count] pairs; serialize to JSON string for Solr
+            if 'keyword_counts' in df.columns:
+                df['keyword_counts'] = df['keyword_counts'].apply(
+                    lambda v: json.dumps(v) if isinstance(v, (list, dict)) else (v if isinstance(v, str) else None)
+                )
 
             # Campos con estructura [["-1", "tipo", "valor"], ...] → "-1|tipo|valor" por elemento
             nested_cols = [

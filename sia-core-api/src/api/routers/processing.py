@@ -211,6 +211,7 @@ async def _run_extract_pipeline(job_id: str, params: dict) -> None:
             "--calculate-on", params["calculate_on"],
             "--mode", "generative",
             "--llm-model-gen", params["llm_model_gen"],
+            "--ollama-host", params["ollama_host"],
             *cpv,
         ]),
         ("nlp-process", [
@@ -225,6 +226,7 @@ async def _run_extract_pipeline(job_id: str, params: dict) -> None:
             "--semantic-threshold", str(params["semantic_threshold"]),
             "--embeddings-col", "generative_objective_embeddings",
             "--keywords",
+            "--force",
             *cpv,
         ]),
     ]
@@ -242,9 +244,8 @@ async def _run_train_pipeline(job_id: str, params: dict) -> None:
     tipos = [t.strip() for t in params["train_tipos"].split(":") if t.strip()]
 
     for tipo in tipos:
-        # @TODO: put proper paths
-        tipo_dir = f"{base_dir}/metadata/test_transalte_14_abril/{tipo}"
-        model_path = f"{base_dir}/metadata/test_transalte_14_abril/{tipo}/model"
+        tipo_dir = f"{base_dir}/metadata/{tipo}translate"
+        model_path = f"{base_dir}/metadata/{tipo}translate/model"
         parquet = _metadata_parquet(base_dir, tipo)
         cpv = ["--metadata-parquet", parquet] if Path(parquet).is_file() else []
 
@@ -268,7 +269,7 @@ async def _run_train_pipeline(job_id: str, params: dict) -> None:
 async def _run_infer_pipeline(job_id: str, params: dict) -> None:
     """infer mode: extract-objectives → nlp-process → extract-relevance → tm-infer"""
     data_dir = params["data_dir"]
-    model_dir = f"{params['base_dir']}/metadata/{params['tipo']}/model"
+    model_dir = f"{params['base_dir']}/metadata/{params['tipo']}translate/model"
     cpv = _cpv_args(params)
     base = [
         "-p", data_dir + "/",
@@ -515,8 +516,7 @@ async def run_alia_extract(
     body: ExtractPipelineRequest = Body(...),
 ) -> BatchProcessingResponse:
     base_dir = body.base_dir.rstrip("/")
-    # @TODO: revert to production path when testing is done
-    data_dir = f"{base_dir}/metadata/test_transalte_14_abril/{body.tipo}"
+    data_dir = f"{base_dir}/metadata/{body.tipo}translate"
     job_id = f"extract_{uuid.uuid4().hex[:8]}"
 
     # Snapshot of mtimes BEFORE launching the pipeline
@@ -534,6 +534,7 @@ async def run_alia_extract(
         row_workers=body.row_workers,
         semantic_threshold=body.semantic_threshold,
         mallet=body.mallet,
+        ollama_host=body.ollama_host,
     )
 
     _upsert_job(

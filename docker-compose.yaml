@@ -1,3 +1,6 @@
+networks:
+  sia-net:
+    name: sia-net
 services:
   sia-core-api:
     build:
@@ -12,6 +15,8 @@ services:
       SIA_MASTER_KEY: ${SIA_MASTER_KEY:-master-key-change-in-production}
       API_KEYS_FILE: /config/api_keys.json
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:8080}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - solr
     volumes:
@@ -23,10 +28,10 @@ services:
         limits:
           memory: 100GB
         reservations:
-         devices:
-           - driver: nvidia
-             count: 1
-             capabilities: [gpu]
+          devices:
+            - driver: nvidia
+              device_ids: ["2"]
+              capabilities: [gpu]
 
   solr:
     image: solr:9.1.1

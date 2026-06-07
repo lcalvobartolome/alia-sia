@@ -100,3 +100,90 @@ curl -X GET "http://kumo01:10083/api/documents/search?query=test" \
 | sia-core-api | 10083 | Main REST API |
 | solr | 10085 | Apache Solr search engine |
 | zoo | 10086/10087 | Zookeeper for Solr Cloud |
+
+
+## Instructions for deployment
+
+### 1. Create env file with the following structure
+
+Create a `.env` file in the project root:
+
+```bash
+# Master key for API key management (admin operations)
+SIA_MASTER_KEY=your-secure-master-key-here
+
+# CORS allowed origins (comma-separated). Use "*" for development only.
+CORS_ORIGINS=http://kumo01:3000,https://your-frontend.com
+
+# GitHub token to clone private pipeline repository during Docker build
+GITHUB_TOKEN=your-github-token-here
+```
+
+### 2. Download the Solr plugin
+
+```bash
+rm -rf solr-plugins/NP-solr-dist-plugin
+mkdir -p solr-plugins/NP-solr-dist-plugin
+wget -O solr-plugins/NP-solr-dist-plugin/NP-solr-dist-plugin.jar \
+  https://github.com/nextprocurement/NP-solr-dist-plugin/raw/main/NP-solr-dist-plugin.jar
+```
+
+### 3. Build and start services
+
+```bash
+docker compose up -d --build
+```
+
+To follow the logs:
+
+```bash
+docker compose logs -f sia-core-api
+```
+
+### 4. Generate an API key
+
+Once the API is running, use the master key to generate an API key for regular access:
+
+```bash
+curl -X POST "http://kumo01:10083/admin/api-keys" \
+  -H "X-API-Key: your-master-key" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "my-client"}'
+```
+
+## Commands
+
+### To index a corpus:
+
+```bash
+curl -X 'POST' \
+  'http://<host>:<port>/processing/corpora' \
+  -H 'accept: application/json' \
+  -H 'X-API-Key: <your-api-key>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "corpus_name": "<corpus_name>"
+}'
+```
+
+### To launch the extract pipeline:
+
+```bash
+curl -X 'POST' \
+  'http://<host>:<port>/processing/alia-pipeline/extract' \
+  -H 'accept: application/json' \
+  -H 'X-API-Key: <your-api-key>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "base_dir": "<data_dir>",
+  "tipo": "<tipo>",
+  "calculate_on": "<field_name>",
+  "llm_model_gen": "<ollama_model>",
+  "embed_model": "<huggingface_embed_model>",
+  "file_workers": <num_file_workers>,
+  "row_workers": <num_row_workers>,
+  "semantic_threshold": <threshold>,
+  "mallet": "<path_to_mallet>",
+  "ollama_host": "<ollama_host_url>"
+}'
+```

@@ -133,7 +133,9 @@ async def list_collections(
     """List all available Solr collections."""
     sc = request.app.state.solr_client
     try:
-        collections = sc.list_collections()
+        collections, code = sc.list_collections()
+        if code != 200:
+            raise SolrException(f"Error listing collections (code: {code})")
         return CollectionListResponse(
             success=True,
             collections=collections
