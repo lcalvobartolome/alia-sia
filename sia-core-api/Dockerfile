@@ -3,6 +3,8 @@ ARG GITHUB_TOKEN
 ARG TARGETARCH
 ENV TZ=Europe/Madrid
 ENV DEBIAN_FRONTEND=noninteractive
+ENV MALLET_VERSION=202108
+ENV MALLET_URL="https://github.com/mimno/Mallet/releases/download/v${MALLET_VERSION}/Mallet-${MALLET_VERSION}-bin.tar.gz"
 ENV MALLET_HOME=/opt/mallet
 ENV PATH="$MALLET_HOME/bin:$PATH"
 
