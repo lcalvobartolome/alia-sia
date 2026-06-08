@@ -11,6 +11,7 @@ services:
     ports:
       - 10083:10083
     environment:
+      #NVIDIA_DRIVER_CAPABILITIES: compute,utility # needed in Lt2
       SOLR_URL: http://solr:8983
       SIA_MASTER_KEY: ${SIA_MASTER_KEY:-master-key-change-in-production}
       API_KEYS_FILE: /config/api_keys.json
@@ -27,6 +28,7 @@ services:
       resources:
         limits:
           memory: 100GB
+        # remove the following for Lt2
         reservations:
           devices:
             - driver: nvidia
