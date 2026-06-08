@@ -63,8 +63,12 @@ RUN git clone https://x-access-token:${GITHUB_TOKEN}@github.com/lcalvobartolome/
     pip cache purge
 
 # Mallet
-# Mallet
-COPY mallet-2.0.8/ /opt/mallet/
+RUN wget $MALLET_URL -O /tmp/mallet.tar.gz && \
+    tar -xvzf /tmp/mallet.tar.gz -C /opt && \
+    mv /opt/Mallet-${MALLET_VERSION} /opt/mallet && \
+    rm /tmp/mallet.tar.gz && \
+    rm -rf /opt/mallet/sample-data  # Remove sample data to reduce image size
+
 RUN mkdir -p /mnt/data /data/inference
 
 # Pre-download embeddings model to avoid downloading at runtime
