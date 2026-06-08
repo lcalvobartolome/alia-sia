@@ -119,7 +119,48 @@ CORS_ORIGINS=http://kumo01:3000,https://your-frontend.com
 GITHUB_TOKEN=your-github-token-here
 ```
 
-### 2. Download the Solr plugin
+### 2. Actualize folder with data and GPU resources in docker-compose.yaml
+```docker
+networks:
+  sia-net:
+    name: sia-net
+services:
+  sia-core-api:
+    build:
+      context: ./sia-core-api
+      args:
+        GITHUB_TOKEN: ${GITHUB_TOKEN}
+    container_name: sia-core-api
+    ports:
+      - 10083:10083
+    environment:
+      #NVIDIA_DRIVER_CAPABILITIES: compute,utility # needed in Lt2 >>---
+      SOLR_URL: http://solr:8983
+      SIA_MASTER_KEY: ${SIA_MASTER_KEY:-master-key-change-in-production}
+      API_KEYS_FILE: /config/api_keys.json
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:8080}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - solr
+    volumes:
+      - {folder_with_data}:/mnt/data >>---
+      - ./sia-config:/config
+      - ./db/data/sqlite3/pipeline_jobs.db:/data/pipeline_jobs.db
+    deploy:
+      resources:
+        limits:
+          memory: 100GB
+        # remove the following for Lt2 >>---
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["2"]
+              capabilities: [gpu]
+```
+
+
+### 3. Download the Solr plugin
 
 ```bash
 rm -rf solr-plugins/NP-solr-dist-plugin
@@ -128,7 +169,7 @@ wget -O solr-plugins/NP-solr-dist-plugin/NP-solr-dist-plugin.jar \
   https://github.com/nextprocurement/NP-solr-dist-plugin/raw/main/NP-solr-dist-plugin.jar
 ```
 
-### 3. Build and start services
+### 4. Build and start services
 
 ```bash
 docker compose up -d --build
@@ -140,7 +181,7 @@ To follow the logs:
 docker compose logs -f sia-core-api
 ```
 
-### 4. Generate an API key
+### 5. Generate an API key
 
 Once the API is running, use the master key to generate an API key for regular access:
 

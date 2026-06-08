@@ -211,7 +211,7 @@ async def _run_extract_pipeline(job_id: str, params: dict) -> None:
             "--calculate-on", params["calculate_on"],
             "--mode", "generative",
             "--llm-model-gen", params["llm_model_gen"],
-            "--ollama-host", params["ollama_host"],
+            "--ollama_host", params["ollama_host"],
             *cpv,
         ]),
         ("nlp-process", [
