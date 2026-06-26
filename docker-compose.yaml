@@ -21,7 +21,7 @@ services:
     depends_on:
       - solr
     volumes:
-      - /export/data_ml4ds/alia/place/:/mnt/data
+      - ./data/:/mnt/data
       - ./sia-config:/config
       - ./db/data/sqlite3/pipeline_jobs.db:/data/pipeline_jobs.db
     deploy:
@@ -29,11 +29,11 @@ services:
         limits:
           memory: 100GB
         # remove the following for Lt2
-        reservations:
-          devices:
-            - driver: nvidia
-              device_ids: ["2"]
-              capabilities: [gpu]
+        #reservations:
+        #  devices:
+        #    - driver: nvidia
+        #      device_ids: ["2"]
+        #      capabilities: [gpu]
 
   solr:
     image: solr:9.1.1

@@ -159,7 +159,6 @@ services:
               capabilities: [gpu]
 ```
 
-
 ### 3. Download the Solr plugin
 
 ```bash
@@ -186,11 +185,13 @@ docker compose logs -f sia-core-api
 Once the API is running, use the master key to generate an API key for regular access:
 
 ```bash
-curl -X POST "http://kumo01:10083/admin/api-keys" \
+curl -X POST "http://<host>:<port>/admin/api-keys" \
   -H "X-API-Key: your-master-key" \
   -H "Content-Type: application/json" \
   -d '{"name": "my-client"}'
 ```
+
+---
 
 ## Commands
 
