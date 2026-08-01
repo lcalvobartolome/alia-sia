@@ -210,8 +210,9 @@ db/datasolr-plugins/NP-solr-dist-plugin/NP-solr-dist-plugin.jar
 # Archivos grandes
 *.jar
 db/data/zoo/logs/
-solr-plugins
+solr-plugins/NP-solr-dist-plugin/NP-solr-dist-plugin.jar
 db
 sia-config/api_keys.json
 sia-core-api/figures
 sia-core-api/mallet-2.0.8
+data

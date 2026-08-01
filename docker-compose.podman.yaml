@@ -1,6 +1,10 @@
+# Podman-compatible variant of docker-compose.yaml.
+# podman compose -f docker-compose.podman.yaml up -d
+
 networks:
   sia-net:
     name: sia-net
+
 services:
   sia-core-api:
     build:
@@ -22,9 +26,9 @@ services:
     depends_on:
       - solr
     volumes:
-      - ./data/:/mnt/data
-      - ./sia-config:/config
-      - ./db/data/sqlite3/pipeline_jobs.db:/data/pipeline_jobs.db
+      - ./data/:/mnt/data:Z
+      - ./sia-config:/config:Z
+      - ./db/data/sqlite3/pipeline_jobs.db:/data/pipeline_jobs.db:Z
     deploy:
       resources:
         limits:
@@ -35,6 +39,11 @@ services:
         #    - driver: nvidia
         #      device_ids: ["2"]
         #      capabilities: [gpu]
+        # NOTE: if you re-enable GPU access under Podman, the docker
+        # `driver: nvidia` reservation syntax above does not apply - Podman
+        # uses CDI instead, e.g.:
+        #   devices:
+        #     - nvidia.com/gpu=all
 
   solr:
     build:
@@ -43,9 +52,9 @@ services:
     container_name: sia-solr
     restart: always
     volumes:
-      - ./db/data/solr:/var/solr
-      - ./solr-config:/opt/solr/server/solr
-      - ./solr-config/solr.in.sh:/etc/default/solr.in.sh
+      - ./db/data/solr:/var/solr:Z
+      - ./solr-config:/opt/solr/server/solr:Z
+      - ./solr-config/solr.in.sh:/etc/default/solr.in.sh:Z
     ports:
       - 10085:8983
     entrypoint:
@@ -80,9 +89,9 @@ services:
     #networks:
     #  - np-net
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ./solr-config/bash_scripts:/bash_scripts
-      - ./db/data/solr:/db/data/solr
+      - ${PODMAN_SOCK:-/run/podman/podman.sock}:/var/run/docker.sock
+      - ./solr-config/bash_scripts:/bash_scripts:Z
+      - ./db/data/solr:/db/data/solr:Z
     command:
       - sh
       - -c
@@ -93,7 +102,7 @@ services:
           memory: 100GB
 
   solr-initializer:
-    image: alpine
+    image: docker.io/library/alpine
     container_name: sia-solr-initializer
     restart: "no"
     entrypoint: |
@@ -101,10 +110,10 @@ services:
     #networks:
     #  - np-net
     volumes:
-      - ./db/data/solr:/solr
+      - ./db/data/solr:/solr:Z
 
   zoo:
-    image: zookeeper
+    image: docker.io/library/zookeeper
     container_name: sia-zoo
     restart: always
     ports:
@@ -113,8 +122,8 @@ services:
     environment:
       - JVMFLAGS=-Djute.maxbuffer=50000000
     volumes:
-      - ./db/data/zoo/data:/data
-      - ./db/data/zoo/logs:/datalog
+      - ./db/data/zoo/data:/data:Z
+      - ./db/data/zoo/logs:/datalog:Z
     #networks:
     #  - np-net
     deploy:

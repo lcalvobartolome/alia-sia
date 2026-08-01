@@ -73,12 +73,17 @@ RUN wget $MALLET_URL -O /tmp/mallet.tar.gz && \
 
 RUN mkdir -p /mnt/data /data/inference
 
-# Pre-download embeddings model to avoid downloading at runtime
+# Persistent Hugging Face cache baked into the image itself
+ENV HF_HOME=/opt/hf_cache
+ENV TRANSFORMERS_CACHE=/opt/hf_cache
+ENV SENTENCE_TRANSFORMERS_HOME=/opt/hf_cache
+
+# Pre-download the embeddings model into that cache
 ARG MODEL_NAME=hiiamsid/sentence_similarity_spanish_es
-RUN python3 - <<EOF
-from sentence_transformers import SentenceTransformer
-SentenceTransformer('${MODEL_NAME}').save('/tmp/huggingface')
-EOF
+RUN python3 -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('${MODEL_NAME}')"
+
+# Fail fast instead of silently trying (and hanging) to hit the network if the cache is ever missing something once the container is moved/offline.
+ENV HF_HUB_OFFLINE=1
 
 COPY . .
 EXPOSE 10083
