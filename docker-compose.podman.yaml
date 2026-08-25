@@ -1,17 +1,14 @@
-# Podman-compatible variant of docker-compose.yaml.
-# podman compose -f docker-compose.podman.yaml up -d
-
 networks:
   sia-net:
     name: sia-net
 
 services:
   sia-core-api:
+    image: ${SIA_CORE_API_IMAGE:-sia-core-api:latest} # to use a precompiled image instead of building; comment out if build is going to be used.
     build:
       context: ./sia-core-api
       args:
         GITHUB_TOKEN: ${GITHUB_TOKEN}
-    image: sia-core-api:latest
     container_name: sia-core-api
     ports:
       - 10083:10083
@@ -25,36 +22,36 @@ services:
       - "host.docker.internal:host-gateway"
     depends_on:
       - solr
+    networks:
+      - sia-net
     volumes:
-      - ./data/:/mnt/data:Z
-      - ./sia-config:/config:Z
-      - ./db/data/sqlite3/pipeline_jobs.db:/data/pipeline_jobs.db:Z
+      - ${SIA_DATA_DIR:-./data}/:/mnt/data
+      - ./sia-config:/config
+      - ./db/data/sqlite3/pipeline_jobs.db:/data/pipeline_jobs.db
     deploy:
       resources:
         limits:
           memory: 100GB
-        # remove the following for Lt2
+        # GPU reservation, optional - remove/leave commented for Lt2 or machines without a GPU
         #reservations:
         #  devices:
         #    - driver: nvidia
         #      device_ids: ["2"]
         #      capabilities: [gpu]
-        # NOTE: if you re-enable GPU access under Podman, the docker
-        # `driver: nvidia` reservation syntax above does not apply - Podman
-        # uses CDI instead, e.g.:
+        # NOTE: under Podman use CDI instead of the docker `driver: nvidia` syntax above:
         #   devices:
         #     - nvidia.com/gpu=all
 
   solr:
+    image: ${SOLR_IMAGE:-sia-solr:9.1.1}  # to use a precompiled image instead of building; comment out if build is going to be used.
     build:
       context: ./solr-plugins/NP-solr-dist-plugin
-    image: sia-solr:9.1.1
     container_name: sia-solr
     restart: always
     volumes:
-      - ./db/data/solr:/var/solr:Z
-      - ./solr-config:/opt/solr/server/solr:Z
-      - ./solr-config/solr.in.sh:/etc/default/solr.in.sh:Z
+      - ${SOLR_DATA_DIR:-./db/data/solr}:/var/solr:Z,U
+      - ./solr-config:/opt/solr/server/solr:Z,U
+      - ./solr-config/solr.in.sh:/etc/default/solr.in.sh:Z,U
     ports:
       - 10085:8983
     entrypoint:
@@ -70,50 +67,15 @@ services:
     environment:
       - SOLR_OPTS=-Dsolr.jetty.request.header.size=65535
       - SOLR_JAVA_MEM=-Xms1g -Xmx1g
-    #networks:
-    #  - np-net
+    networks:
+      - sia-net
     deploy:
       resources:
         limits:
           memory: 100GB
-
-  solr-config:
-    build: ./solr-config
-    image: sia-solr-config:latest
-    container_name: sia-solr-config
-    ports:
-      - 10088:81
-    depends_on:
-      - solr
-      - zoo
-    #networks:
-    #  - np-net
-    volumes:
-      - ${PODMAN_SOCK:-/run/podman/podman.sock}:/var/run/docker.sock
-      - ./solr-config/bash_scripts:/bash_scripts:Z
-      - ./db/data/solr:/db/data/solr:Z
-    command:
-      - sh
-      - -c
-      - "chmod +x /bash_scripts/init_config.sh && ls /bash_scripts && bash_scripts/init_config.sh /db/data/solr/data"
-    deploy:
-      resources:
-        limits:
-          memory: 100GB
-
-  solr-initializer:
-    image: docker.io/library/alpine
-    container_name: sia-solr-initializer
-    restart: "no"
-    entrypoint: |
-      /bin/sh -c "chown 8983:8983 /solr"
-    #networks:
-    #  - np-net
-    volumes:
-      - ./db/data/solr:/solr:Z
 
   zoo:
-    image: docker.io/library/zookeeper
+    image: ${ZOOKEEPER_IMAGE:-docker.io/library/zookeeper}  # to use a precompiled image instead of building; comment out if build is going to be used.
     container_name: sia-zoo
     restart: always
     ports:
@@ -122,10 +84,10 @@ services:
     environment:
       - JVMFLAGS=-Djute.maxbuffer=50000000
     volumes:
-      - ./db/data/zoo/data:/data:Z
-      - ./db/data/zoo/logs:/datalog:Z
-    #networks:
-    #  - np-net
+      - ./db/data/zoo/data:/data
+      - ./db/data/zoo/logs:/datalog
+    networks:
+      - sia-net
     deploy:
       resources:
         limits:
